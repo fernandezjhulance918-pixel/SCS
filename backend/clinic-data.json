@@ -1,0 +1,22 @@
+{
+  "students": [],
+  "visits": [
+    {
+      "id": 1792508071553,
+      "student": "jjj",
+      "complaint": "jjj",
+      "treatment": "jj",
+      "status": "Observation",
+      "date": "10/20/2026"
+    }
+  ],
+  "medicines": [
+    {
+      "id": 1791077760296,
+      "name": "Mefenamic Acid",
+      "category": "Pain Reliever",
+      "stock": 34,
+      "expiry": "2026-10-15"
+    }
+  ]
+}
