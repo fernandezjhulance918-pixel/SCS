@@ -4,6 +4,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+
+app.use(cors());
+const app = express();
+  
+const PORT = process.env.PORT || 8080;
+
+app.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
+});
 // ==========================================
 // FILE / FOLDER SETUP
 // ==========================================
@@ -16,15 +25,9 @@ const DATA_FILE = path.join(
   "clinic-data.json"
 );
 
-// ==========================================
-// EXPRESS
-// ==========================================
 
-const PORT = process.env.PORT || 8080;
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server is running on port ${PORT}`);
-});
+
 // ==========================================
 // EMPTY DATABASE
 // ==========================================
