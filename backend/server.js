@@ -20,9 +20,9 @@ const DATA_FILE = path.join(
 // EXPRESS
 // ==========================================
 
-const app = express();
+const app = express(PORT);
 
-const PORT = 8080;
+const PORT = process.env.PORT || 8080;
 
 // ==========================================
 // EMPTY DATABASE
