@@ -3,10 +3,10 @@ import cors from "cors";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
+const app = express();
 
 app.use(cors());
-const app = express();
+app.use(express.json());
   
 const PORT = process.env.PORT || 8080;
 
