@@ -6,188 +6,151 @@ import { auth } from "../Firebase";
 
 const API_BASE = "http://localhost:8080/api";
 
+async function apiRequest(endpoint, options = {}) {
+  const response = await fetch(`${API_BASE}${endpoint}`, {
+    ...options,
+    headers: {
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...options.headers,
+    },
+  });
+
+  const text = await response.text();
+  let data = {};
+
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    throw new Error("The backend returned an invalid response.");
+  }
+
+  if (!response.ok) {
+    throw new Error(
+      data.message || data.error || `Request failed (${response.status})`
+    );
+  }
+
+  return data;
+}
+
 function Dashboard() {
   const navigate = useNavigate();
-
-  // ==========================================
-  // DATA
-  // ==========================================
 
   const [students, setStudents] = useState([]);
   const [visits, setVisits] = useState([]);
   const [medicines, setMedicines] = useState([]);
+  const [medicalRecords, setMedicalRecords] = useState([]);
+  const [stockManagement, setStockManagement] = useState([]);
 
-  const [activeSection, setActiveSection] =
-    useState("dashboard");
-
-  const [loggedInUser, setLoggedInUser] =
-    useState("Administrator");
-
+  const [activeSection, setActiveSection] = useState("dashboard");
+  const [loggedInUser, setLoggedInUser] = useState("Administrator");
   const [modal, setModal] = useState(null);
+  const [recordSearch, setRecordSearch] = useState("");
+  const [loading, setLoading] = useState(true);
 
-  const [recordSearch, setRecordSearch] =
-    useState("");
+  const [studentForm, setStudentForm] = useState({
+    id: "",
+    name: "",
+    grade: "",
+    contact: "",
+  });
 
-  // ==========================================
-  // FORM STATES
-  // ==========================================
+  const [visitForm, setVisitForm] = useState({
+    student: "",
+    complaint: "",
+    treatment: "",
+    status: "Treated",
+  });
 
-  const [studentForm, setStudentForm] =
-    useState({
-      id: "",
-      name: "",
-      grade: "",
-      contact: "",
-    });
+  const [medicineForm, setMedicineForm] = useState({
+    id: "",
+    name: "",
+    category: "",
+    stock: "",
+    expiry: "",
+  });
 
-  const [visitForm, setVisitForm] =
-    useState({
-      student: "",
-      complaint: "",
-      treatment: "",
-      status: "Treated",
-    });
+  const [medicalRecordForm, setMedicalRecordForm] = useState({
+    student_id: "",
+    diagnosis: "",
+    treatment: "",
+    notes: "",
+    record_date: new Date().toISOString().slice(0, 10),
+  });
 
-  const [medicineForm, setMedicineForm] =
-    useState({
-      id: "",
-      name: "",
-      category: "",
-      stock: "",
-      expiry: "",
-    });
+  const [stockForm, setStockForm] = useState({
+    medicine_id: "",
+    movement_type: "Stock In",
+    quantity: "",
+    reason: "",
+  });
 
   // ==========================================
   // FIREBASE AUTHENTICATION
   // ==========================================
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(
-      auth,
-      (user) => {
-        if (!user) {
-          navigate("/login", {
-            replace: true,
-          });
-          return;
-        }
-
-        setLoggedInUser(
-          user.displayName ||
-            user.email ||
-            "Administrator"
-        );
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      if (!user) {
+        navigate("/login", { replace: true });
+        return;
       }
-    );
+
+      setLoggedInUser(
+        user.displayName || user.email || "Administrator"
+      );
+    });
 
     return () => unsubscribe();
   }, [navigate]);
 
   // ==========================================
-  // LOAD DATA FROM BACKEND
+  // LOAD ALL DATA FROM MYSQL
   // ==========================================
 
-  useEffect(() => {
-    let cancelled = false;
+  const loadClinicData = async () => {
+    try {
+      setLoading(true);
 
-    const sleep = (ms) =>
-      new Promise((resolve) =>
-        setTimeout(resolve, ms)
+      const data = await apiRequest("/clinic-data");
+
+      setStudents(Array.isArray(data.students) ? data.students : []);
+      setVisits(Array.isArray(data.visits) ? data.visits : []);
+      setMedicines(Array.isArray(data.medicines) ? data.medicines : []);
+      setMedicalRecords(
+        Array.isArray(data.medicalRecords) ? data.medicalRecords : []
       );
+      setStockManagement(
+        Array.isArray(data.stockManagement) ? data.stockManagement : []
+      );
+    } catch (error) {
+      console.error("Load clinic data error:", error);
 
-    const loadClinicData = async () => {
-      let lastError = null;
+      alert(
+        `Could not load clinic data.\n\n${error.message}\n\nMake sure MySQL and the backend are running.`
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
 
-      for (
-        let attempt = 0;
-        attempt < 15;
-        attempt += 1
-      ) {
-        try {
-          const response = await fetch(
-            `${API_BASE}/clinic-data`,
-            {
-              cache: "no-store",
-            }
-          );
-
-          if (!response.ok) {
-            throw new Error(
-              `Backend returned ${response.status}`
-            );
-          }
-
-          const data =
-            await response.json();
-
-          if (cancelled) return;
-
-          setStudents(
-            Array.isArray(data.students)
-              ? data.students
-              : []
-          );
-
-          setVisits(
-            Array.isArray(data.visits)
-              ? data.visits
-              : []
-          );
-
-          setMedicines(
-            Array.isArray(data.medicines)
-              ? data.medicines
-              : []
-          );
-
-          return;
-        } catch (error) {
-          lastError = error;
-
-          await sleep(400);
-        }
-      }
-
-      if (!cancelled) {
-        console.error(
-          "Could not load clinic data:",
-          lastError
-        );
-
-        alert(
-          "The clinic backend could not be reached.\n\nPlease make sure the backend is running on localhost:8080."
-        );
-      }
-    };
-
+  useEffect(() => {
     loadClinicData();
-
-    return () => {
-      cancelled = true;
-    };
   }, []);
 
   // ==========================================
   // COUNTS
   // ==========================================
 
-  const totalStudents =
-    students.length;
+  const totalStudents = students.length;
+  const totalVisits = visits.length;
+  const totalMedicines = medicines.length;
 
-  const totalVisits =
-    visits.length;
+  const lowStockMedicines = medicines.filter(
+    (medicine) => Number(medicine.stock) <= 5
+  );
 
-  const totalMedicines =
-    medicines.length;
-
-  const lowStockMedicines =
-    medicines.filter(
-      (medicine) =>
-        Number(medicine.stock) <= 5
-    );
-
-  const lowStock =
-    lowStockMedicines.length;
+  const lowStock = lowStockMedicines.length;
 
   // ==========================================
   // NAVIGATION
@@ -202,29 +165,19 @@ function Dashboard() {
   // ==========================================
 
   const logout = async () => {
-    const confirmed =
-      window.confirm(
-        "Are you sure you want to log out?"
-      );
-
-    if (!confirmed) return;
+    if (!window.confirm("Are you sure you want to log out?")) return;
 
     try {
       await signOut(auth);
-
-      navigate("/login", {
-        replace: true,
-      });
+      navigate("/login", { replace: true });
     } catch (error) {
-      console.error(
-        "Logout error:",
-        error
-      );
+      console.error("Logout error:", error);
+      alert(error.message);
     }
   };
 
   // ==========================================
-  // STUDENT
+  // STUDENTS
   // ==========================================
 
   const openStudentModal = () => {
@@ -239,154 +192,76 @@ function Dashboard() {
   };
 
   const addStudent = async () => {
-    const id =
-      studentForm.id.trim();
-
-    const name =
-      studentForm.name.trim();
-
-    const grade =
-      studentForm.grade.trim();
-
-    const contact =
-      studentForm.contact.trim();
+    const id = studentForm.id.trim();
+    const name = studentForm.name.trim();
+    const grade = studentForm.grade.trim();
+    const contact = studentForm.contact.trim();
 
     if (!id || !name || !grade) {
-      alert(
-        "Please complete Student ID, Name, and Grade."
-      );
+      alert("Please complete Student ID, Name, and Grade.");
       return;
     }
 
-    const duplicate =
-      students.some(
-        (student) =>
-          String(student.id) === id
-      );
+    const duplicate = students.some(
+      (student) => String(student.student_code || student.id) === id
+    );
 
     if (duplicate) {
-      alert(
-        "This Student ID already exists."
-      );
+      alert("This Student ID already exists.");
       return;
     }
 
     try {
-      const response = await fetch(
-        `${API_BASE}/students`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type":
-              "application/json",
-          },
-          body: JSON.stringify({
-            id,
-            name,
-            grade,
-            contact,
-          }),
-        }
-      );
+      const result = await apiRequest("/students", {
+        method: "POST",
+        body: JSON.stringify({ id, name, grade, contact }),
+      });
 
-      const result =
-        await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          result.message ||
-            "Failed to save student"
-        );
-      }
-
-      setStudents(
-        (current) => [
-          ...current,
-          result,
-        ]
-      );
-
+      setStudents((current) => [result, ...current]);
       setModal(null);
 
-      alert(
-        "Student added successfully!"
-      );
+      alert("Student successfully saved to MySQL!");
     } catch (error) {
-      console.error(
-        "Add student error:",
-        error
-      );
-
-      alert(
-        "Student was not saved. Please make sure the backend is running."
-      );
+      console.error("Add student error:", error);
+      alert(`Student was not saved.\n\n${error.message}`);
     }
   };
 
   const deleteStudent = async (id) => {
-    const student =
-      students.find(
-        (item) =>
-          String(item.id) ===
-          String(id)
-      );
+    const student = students.find(
+      (item) => String(item.id) === String(id)
+    );
 
     if (!student) return;
 
-    const confirmed =
-      window.confirm(
-        `Are you sure you want to delete ${student.name}?`
-      );
-
-    if (!confirmed) return;
+    if (!window.confirm(`Are you sure you want to delete ${student.name}?`)) {
+      return;
+    }
 
     try {
-      const response =
-        await fetch(
-          `${API_BASE}/students/${encodeURIComponent(
-            id
-          )}`,
-          {
-            method: "DELETE",
-          }
-        );
+      await apiRequest(`/students/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
 
-      const result =
-        await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          result.error ||
-            "Failed to delete student"
-        );
-      }
-
-      setStudents(
-        (current) =>
-          current.filter(
-            (item) =>
-              String(item.id) !==
-              String(id)
-          )
+      setStudents((current) =>
+        current.filter((item) => String(item.id) !== String(id))
       );
 
-      alert(
-        "Student deleted successfully."
+      setMedicalRecords((current) =>
+        current.filter(
+          (record) => String(record.student_id) !== String(id)
+        )
       );
+
+      alert("Student deleted successfully.");
     } catch (error) {
-      console.error(
-        "Delete student error:",
-        error
-      );
-
-      alert(
-        "Student could not be deleted. Please make sure the backend is running."
-      );
+      console.error("Delete student error:", error);
+      alert(`Student could not be deleted.\n\n${error.message}`);
     }
   };
 
   // ==========================================
-  // VISITS
+  // CLINIC VISITS
   // ==========================================
 
   const openVisitModal = () => {
@@ -401,132 +276,55 @@ function Dashboard() {
   };
 
   const addVisit = async () => {
-    const student =
-      visitForm.student.trim();
-
-    const complaint =
-      visitForm.complaint.trim();
-
-    const treatment =
-      visitForm.treatment.trim();
+    const student = visitForm.student.trim();
+    const complaint = visitForm.complaint.trim();
+    const treatment = visitForm.treatment.trim();
 
     if (!student || !complaint) {
-      alert(
-        "Please enter the student name and complaint."
-      );
+      alert("Please enter the student name and complaint.");
       return;
     }
 
-    const newVisit = {
-      id: Date.now(),
-      student,
-      complaint,
-      treatment,
-      status:
-        visitForm.status,
-      date: new Date().toLocaleDateString(),
-    };
-
     try {
-      const response =
-        await fetch(
-          `${API_BASE}/visits`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type":
-                "application/json",
-            },
-            body: JSON.stringify(
-              newVisit
-            ),
-          }
-        );
+      const result = await apiRequest("/visits", {
+        method: "POST",
+        body: JSON.stringify({
+          student,
+          complaint,
+          treatment,
+          status: visitForm.status,
+          date: new Date().toISOString().slice(0, 10),
+        }),
+      });
 
-      const result =
-        await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          result.message ||
-            "Failed to save visit"
-        );
-      }
-
-      setVisits(
-        (current) => [
-          ...current,
-          result,
-        ]
-      );
-
+      setVisits((current) => [result, ...current]);
       setModal(null);
 
-      alert(
-        "Clinic visit recorded successfully!"
-      );
+      alert("Clinic visit successfully saved to MySQL!");
     } catch (error) {
-      console.error(
-        "Add visit error:",
-        error
-      );
-
-      alert(
-        "Clinic visit was not saved. Please make sure the backend is running."
-      );
+      console.error("Add visit error:", error);
+      alert(`Clinic visit was not saved.\n\n${error.message}`);
     }
   };
 
   const deleteVisit = async (id) => {
-    const confirmed =
-      window.confirm(
-        "Are you sure you want to delete this clinic visit?"
-      );
-
-    if (!confirmed) return;
+    if (!window.confirm("Are you sure you want to delete this clinic visit?")) {
+      return;
+    }
 
     try {
-      const response =
-        await fetch(
-          `${API_BASE}/visits/${encodeURIComponent(
-            id
-          )}`,
-          {
-            method: "DELETE",
-          }
-        );
+      await apiRequest(`/visits/${id}`, {
+        method: "DELETE",
+      });
 
-      const result =
-        await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          result.error ||
-            "Failed to delete visit"
-        );
-      }
-
-      setVisits(
-        (current) =>
-          current.filter(
-            (item) =>
-              String(item.id) !==
-              String(id)
-          )
+      setVisits((current) =>
+        current.filter((visit) => String(visit.id) !== String(id))
       );
 
-      alert(
-        "Clinic visit deleted successfully."
-      );
+      alert("Clinic visit deleted successfully.");
     } catch (error) {
-      console.error(
-        "Delete visit error:",
-        error
-      );
-
-      alert(
-        "Clinic visit could not be deleted. Please make sure the backend is running."
-      );
+      console.error("Delete visit error:", error);
+      alert(`Clinic visit could not be deleted.\n\n${error.message}`);
     }
   };
 
@@ -546,309 +344,281 @@ function Dashboard() {
     setModal("medicine");
   };
 
-  // ==========================================
-  // ADD MEDICINE
-  // ==========================================
-
   const addMedicine = async () => {
-    const name =
-      medicineForm.name.trim();
+    const name = medicineForm.name.trim();
+    const category = medicineForm.category.trim();
+    const stock = Number(medicineForm.stock);
+    const expiry = medicineForm.expiry || "";
 
-    const category =
-      medicineForm.category.trim();
-
-    const stock =
-      Number(medicineForm.stock);
-
-    const expiry =
-      medicineForm.expiry || "";
-
-    if (
-      !name ||
-      !category ||
-      medicineForm.stock === ""
-    ) {
-      alert(
-        "Please complete all required fields."
-      );
+    if (!name || !category || medicineForm.stock === "") {
+      alert("Please complete all required fields.");
       return;
     }
 
-    if (
-      !Number.isFinite(stock) ||
-      stock < 0
-    ) {
-      alert(
-        "Stock cannot be negative."
-      );
+    if (!Number.isInteger(stock) || stock < 0) {
+      alert("Stock must be a whole number and cannot be negative.");
       return;
     }
-
-    const newMedicine = {
-      id: Date.now(),
-      name,
-      category,
-      stock,
-      expiry,
-    };
 
     try {
-      const response =
-        await fetch(
-          `${API_BASE}/medicines`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type":
-                "application/json",
-            },
-            body: JSON.stringify(
-              newMedicine
-            ),
-          }
-        );
+      const result = await apiRequest("/medicines", {
+        method: "POST",
+        body: JSON.stringify({
+          name,
+          category,
+          stock,
+          expiry,
+        }),
+      });
 
-      const result =
-        await response.json();
+      setMedicines((current) => [result, ...current]);
+      setModal(null);
 
-      if (!response.ok) {
-        throw new Error(
-          result.message ||
-            "Failed to save medicine"
-        );
-      }
+      alert("Medicine successfully saved to MySQL!");
+    } catch (error) {
+      console.error("Add medicine error:", error);
+      alert(`Medicine was not saved.\n\n${error.message}`);
+    }
+  };
 
-      setMedicines(
-        (current) => [
-          ...current,
-          result,
-        ]
+  const editMedicine = (medicine) => {
+    setMedicineForm({
+      id: String(medicine.id),
+      name: medicine.name || "",
+      category: medicine.category || "",
+      stock: medicine.stock ?? "",
+      expiry: medicine.expiry
+        ? String(medicine.expiry).slice(0, 10)
+        : "",
+    });
+
+    setModal("medicine-edit");
+  };
+
+  const updateMedicine = async () => {
+    const id = String(medicineForm.id).trim();
+    const name = medicineForm.name.trim();
+    const category = medicineForm.category.trim();
+    const stock = Number(medicineForm.stock);
+    const expiry = medicineForm.expiry || "";
+
+    if (!id || !name || !category || medicineForm.stock === "") {
+      alert("Please complete all required fields.");
+      return;
+    }
+
+    if (!Number.isInteger(stock) || stock < 0) {
+      alert("Stock must be a whole number and cannot be negative.");
+      return;
+    }
+
+    try {
+      const result = await apiRequest(
+        `/medicines/${encodeURIComponent(id)}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            name,
+            category,
+            stock,
+            expiry,
+          }),
+        }
+      );
+
+      const savedMedicine = result.medicine || result;
+
+      setMedicines((current) =>
+        current.map((medicine) =>
+          String(medicine.id) === id
+            ? { ...medicine, ...savedMedicine }
+            : medicine
+        )
       );
 
       setModal(null);
 
-      alert(
-        "Medicine added successfully!"
-      );
+      alert("Medicine updated successfully in MySQL!");
     } catch (error) {
-      console.error(
-        "Add medicine error:",
-        error
+      console.error("Update medicine error:", error);
+      alert(`Medicine could not be updated.\n\n${error.message}`);
+    }
+  };
+
+  const deleteMedicine = async (id) => {
+    const medicine = medicines.find(
+      (item) => String(item.id) === String(id)
+    );
+
+    if (!medicine) return;
+
+    if (
+      !window.confirm(
+        `Are you sure you want to delete ${medicine.name} from the inventory?`
+      )
+    ) {
+      return;
+    }
+
+    try {
+      await apiRequest(`/medicines/${id}`, {
+        method: "DELETE",
+      });
+
+      setMedicines((current) =>
+        current.filter((item) => String(item.id) !== String(id))
       );
 
-      alert(
-        "Medicine was not saved. Make sure the backend is running on localhost:8080."
-      );
+      alert("Medicine deleted successfully.");
+    } catch (error) {
+      console.error("Delete medicine error:", error);
+      alert(`Medicine could not be deleted.\n\n${error.message}`);
     }
   };
 
   // ==========================================
-  // OPEN EDIT MEDICINE
+  // MEDICAL RECORDS
   // ==========================================
 
-  const editMedicine = (medicine) => {
-    setMedicineForm({
-      id: String(
-        medicine.id
-      ),
-      name:
-        medicine.name || "",
-      category:
-        medicine.category || "",
-      stock:
-        medicine.stock ?? "",
-      expiry:
-        medicine.expiry || "",
+  const openMedicalRecordModal = () => {
+    setMedicalRecordForm({
+      student_id: "",
+      diagnosis: "",
+      treatment: "",
+      notes: "",
+      record_date: new Date().toISOString().slice(0, 10),
     });
 
-    setModal(
-      "medicine-edit"
-    );
+    setModal("medical-record");
+  };
+
+  const addMedicalRecord = async () => {
+    if (
+      !medicalRecordForm.student_id ||
+      !medicalRecordForm.diagnosis.trim()
+    ) {
+      alert("Please select a student and enter a diagnosis.");
+      return;
+    }
+
+    try {
+      const result = await apiRequest("/medical-records", {
+        method: "POST",
+        body: JSON.stringify(medicalRecordForm),
+      });
+
+      setMedicalRecords((current) => [result, ...current]);
+      setModal(null);
+
+      alert("Medical record successfully saved to MySQL!");
+    } catch (error) {
+      console.error("Add medical record error:", error);
+      alert(`Medical record was not saved.\n\n${error.message}`);
+    }
+  };
+
+  const deleteMedicalRecord = async (id) => {
+    if (!window.confirm("Delete this medical record?")) return;
+
+    try {
+      await apiRequest(`/medical-records/${id}`, {
+        method: "DELETE",
+      });
+
+      setMedicalRecords((current) =>
+        current.filter((record) => String(record.id) !== String(id))
+      );
+
+      alert("Medical record deleted successfully.");
+    } catch (error) {
+      console.error("Delete medical record error:", error);
+      alert(`Medical record could not be deleted.\n\n${error.message}`);
+    }
   };
 
   // ==========================================
-  // UPDATE MEDICINE
+  // STOCK MANAGEMENT
   // ==========================================
 
-  const updateMedicine =
-    async () => {
-      const id = String(
-        medicineForm.id
+  const openStockModal = () => {
+    setStockForm({
+      medicine_id: medicines[0] ? String(medicines[0].id) : "",
+      movement_type: "Stock In",
+      quantity: "",
+      reason: "",
+    });
+
+    setModal("stock");
+  };
+
+  const addStockMovement = async () => {
+    const quantity = Number(stockForm.quantity);
+
+    if (
+      !stockForm.medicine_id ||
+      !Number.isInteger(quantity) ||
+      quantity <= 0
+    ) {
+      alert("Select a medicine and enter a positive whole-number quantity.");
+      return;
+    }
+
+    try {
+      const result = await apiRequest("/stock-management", {
+        method: "POST",
+        body: JSON.stringify({
+          ...stockForm,
+          quantity,
+        }),
+      });
+
+      setStockManagement((current) => [result, ...current]);
+
+      setMedicines((current) =>
+        current.map((medicine) =>
+          String(medicine.id) === String(result.medicine_id)
+            ? { ...medicine, stock: result.new_stock }
+            : medicine
+        )
       );
 
-      const name =
-        medicineForm.name.trim();
+      setModal(null);
 
-      const category =
-        medicineForm.category.trim();
-
-      const stock =
-        Number(
-          medicineForm.stock
-        );
-
-      const expiry =
-        medicineForm.expiry || "";
-
-      if (
-        !id ||
-        !name ||
-        !category ||
-        medicineForm.stock === ""
-      ) {
-        alert(
-          "Please complete all required fields."
-        );
-        return;
-      }
-
-      if (
-        !Number.isFinite(
-          stock
-        ) ||
-        stock < 0
-      ) {
-        alert(
-          "Stock cannot be negative."
-        );
-        return;
-      }
-
-      const updatedMedicine = {
-        id,
-        name,
-        category,
-        stock,
-        expiry,
-      };
-
-      try {
-        const response =
-          await fetch(
-            `${API_BASE}/medicines/${encodeURIComponent(
-              id
-            )}`,
-            {
-              method: "PUT",
-              headers: {
-                "Content-Type":
-                  "application/json",
-              },
-              body: JSON.stringify(
-                updatedMedicine
-              ),
-            }
-          );
-
-        const result =
-          await response.json();
-
-        if (!response.ok) {
-          throw new Error(
-            result.message ||
-              "Failed to update medicine"
-          );
-        }
-
-        // Immediately update
-        // the React table
-        setMedicines(
-          (current) =>
-            current.map(
-              (item) =>
-                String(item.id) ===
-                id
-                  ? result
-                  : item
-            )
-        );
-
-        setModal(null);
-
-        alert(
-          "Medicine updated successfully!"
-        );
-      } catch (error) {
-        console.error(
-          "Update medicine error:",
-          error
-        );
-
-        alert(
-          "Medicine could not be updated. Make sure the backend is running on localhost:8080."
-        );
-      }
-    };
+      alert("Stock movement successfully saved to MySQL!");
+    } catch (error) {
+      console.error("Stock movement error:", error);
+      alert(`Stock movement was not saved.\n\n${error.message}`);
+    }
+  };
 
   // ==========================================
-  // DELETE MEDICINE
+  // CLEAR ALL MYSQL DATA
   // ==========================================
 
-  const deleteMedicine =
-    async (id) => {
-      const medicine =
-        medicines.find(
-          (item) =>
-            String(item.id) ===
-            String(id)
-        );
+  const clearAllData = async () => {
+    const confirmed = window.confirm(
+      "WARNING!\n\nThis permanently deletes all records from the six MySQL tables:\n\nStudents, Visits, Medical Records, Medicines, and Stock Management.\n\nAre you sure?"
+    );
 
-      if (!medicine) return;
+    if (!confirmed) return;
 
-      const confirmed =
-        window.confirm(
-          `Are you sure you want to delete ${medicine.name} from the inventory?`
-        );
+    try {
+      await apiRequest("/clinic-data", {
+        method: "DELETE",
+      });
 
-      if (!confirmed) return;
+      setStudents([]);
+      setVisits([]);
+      setMedicines([]);
+      setMedicalRecords([]);
+      setStockManagement([]);
 
-      try {
-        const response =
-          await fetch(
-            `${API_BASE}/medicines/${encodeURIComponent(
-              id
-            )}`,
-            {
-              method: "DELETE",
-            }
-          );
-
-        const result =
-          await response.json();
-
-        if (!response.ok) {
-          throw new Error(
-            result.error ||
-              result.message ||
-              "Failed to delete medicine"
-          );
-        }
-
-        // Immediately remove
-        // from React table
-        setMedicines(
-          (current) =>
-            current.filter(
-              (item) =>
-                String(item.id) !==
-                String(id)
-            )
-        );
-
-        alert(
-          "Medicine deleted successfully."
-        );
-      } catch (error) {
-        console.error(
-          "Delete medicine error:",
-          error
-        );
-
-        alert(
-          "Medicine could not be deleted. Check that the backend is running."
-        );
-      }
-    };
+      alert("All clinic data has been cleared from MySQL.");
+    } catch (error) {
+      console.error("Clear data error:", error);
+      alert(`Could not clear clinic data.\n\n${error.message}`);
+    }
+  };
 
   // ==========================================
   // PAGE TITLES
@@ -872,13 +642,7 @@ function Dashboard() {
 
   return (
     <div className="dashboard-wrapper">
-
-      {/* ======================================
-          SIDEBAR
-      ====================================== */}
-
       <aside className="sidebar">
-
         <div className="brand">
           <i className="bi bi-heart-pulse-fill me-2"></i>
           School Clinic
@@ -889,237 +653,68 @@ function Dashboard() {
         </div>
 
         <nav className="sidebar-nav">
-
-          <button
-            className={`nav-link ${
-              activeSection ===
-              "dashboard"
-                ? "active"
-                : ""
-            }`}
-            onClick={() =>
-              showSection(
-                "dashboard"
-              )
-            }
-          >
-            <i className="bi bi-grid-1x2-fill me-2"></i>
-            Dashboard
-          </button>
-
-          <button
-            className={`nav-link ${
-              activeSection ===
-              "students"
-                ? "active"
-                : ""
-            }`}
-            onClick={() =>
-              showSection(
-                "students"
-              )
-            }
-          >
-            <i className="bi bi-people me-2"></i>
-            Students
-          </button>
-
-          <button
-            className={`nav-link ${
-              activeSection ===
-              "visits"
-                ? "active"
-                : ""
-            }`}
-            onClick={() =>
-              showSection(
-                "visits"
-              )
-            }
-          >
-            <i className="bi bi-heart-pulse me-2"></i>
-            Clinic Visits
-          </button>
-
-          <button
-            className={`nav-link ${
-              activeSection ===
-              "records"
-                ? "active"
-                : ""
-            }`}
-            onClick={() =>
-              showSection(
-                "records"
-              )
-            }
-          >
-            <i className="bi bi-folder2-open me-2"></i>
-            Medical Records
-          </button>
-
-          <button
-            className={`nav-link ${
-              activeSection ===
-              "medicines"
-                ? "active"
-                : ""
-            }`}
-            onClick={() =>
-              showSection(
-                "medicines"
-              )
-            }
-          >
-            <i className="bi bi-capsule me-2"></i>
-            Medicines
-          </button>
-
-          <button
-            className={`nav-link ${
-              activeSection ===
-              "stock"
-                ? "active"
-                : ""
-            }`}
-            onClick={() =>
-              showSection(
-                "stock"
-              )
-            }
-          >
-            <i className="bi bi-box-seam me-2"></i>
-            Stock Management
-          </button>
-
-          <button
-            className={`nav-link ${
-              activeSection ===
-              "reports"
-                ? "active"
-                : ""
-            }`}
-            onClick={() =>
-              showSection(
-                "reports"
-              )
-            }
-          >
-            <i className="bi bi-bar-chart-line me-2"></i>
-            Reports
-          </button>
-
-          <button
-            className={`nav-link ${
-              activeSection ===
-              "users"
-                ? "active"
-                : ""
-            }`}
-            onClick={() =>
-              showSection(
-                "users"
-              )
-            }
-          >
-            <i className="bi bi-person-gear me-2"></i>
-            Users
-          </button>
-
-          <button
-            className={`nav-link ${
-              activeSection ===
-              "settings"
-                ? "active"
-                : ""
-            }`}
-            onClick={() =>
-              showSection(
-                "settings"
-              )
-            }
-          >
-            <i className="bi bi-gear me-2"></i>
-            Settings
-          </button>
-
+          {[
+            ["dashboard", "bi-grid-1x2-fill", "Dashboard"],
+            ["students", "bi-people", "Students"],
+            ["visits", "bi-heart-pulse", "Clinic Visits"],
+            ["records", "bi-folder2-open", "Medical Records"],
+            ["medicines", "bi-capsule", "Medicines"],
+            ["stock", "bi-box-seam", "Stock Management"],
+            ["reports", "bi-bar-chart", "Reports"],
+            ["users", "bi-person-gear", "Users"],
+            ["settings", "bi-gear", "Settings"],
+          ].map(([section, icon, label]) => (
+            <button
+              key={section}
+              className={`nav-link ${
+                activeSection === section ? "active" : ""
+              }`}
+              onClick={() => showSection(section)}
+            >
+              <i className={`bi ${icon} me-2`}></i>
+              {label}
+            </button>
+          ))}
         </nav>
       </aside>
 
-      {/* ======================================
-          MAIN
-      ====================================== */}
-
-      <main className="main">
-
-        {/* TOPBAR */}
-
-        <div className="topbar">
-
-          <div className="page-heading">
-
-            <h4>
-              {
-                pageTitles[
-                  activeSection
-                ]
-              }
+      <main className="main-content">
+        <header className="topbar">
+          <div>
+            <h4 className="fw-bold mb-1">
+              {pageTitles[activeSection]}
             </h4>
-
-            <small className="text-muted">
+            <p className="text-muted mb-0">
               School Clinic Management System
-            </small>
-
+            </p>
           </div>
 
           <div className="topbar-actions">
-
             <button
-              className="btn btn-light-green rounded-circle"
+              className="notification-button"
+              onClick={() => setModal("notifications")}
               title="Notifications"
-              onClick={() =>
-                setModal(
-                  "notifications"
-                )
-              }
             >
               <i className="bi bi-bell"></i>
             </button>
 
             <button
               className="btn btn-green"
-              onClick={
-                openVisitModal
-              }
+              onClick={openVisitModal}
             >
               <i className="bi bi-plus-lg me-1"></i>
               New Clinic Visit
             </button>
 
-            <div className="user-pill">
-
+            <div className="user-info">
               <div className="admin-avatar">
                 <i className="bi bi-person"></i>
               </div>
-
-              <div className="d-none d-sm-block">
-
-                <div className="fw-semibold small">
-                  {loggedInUser}
-                </div>
-
-                <div
-                  className="text-muted"
-                  style={{
-                    fontSize:
-                      "11px",
-                  }}
-                >
-                  Admin
-                </div>
-
+              <div>
+                <strong>{loggedInUser}</strong>
+                <br />
+                <small className="text-muted">Admin</small>
               </div>
-
             </div>
 
             <button
@@ -1129,584 +724,274 @@ function Dashboard() {
               <i className="bi bi-box-arrow-right me-1"></i>
               Logout
             </button>
-
           </div>
-        </div>
+        </header>
 
-        {/* ======================================
-            CONTENT
-        ====================================== */}
+        <div className="content-area">
+          {loading ? (
+            <div className="card p-5 text-center">
+              <div
+                className="spinner-border text-success mx-auto mb-3"
+                role="status"
+              ></div>
+              <p className="text-muted mb-0">
+                Loading clinic data from MySQL...
+              </p>
+            </div>
+          ) : (
+            <>
+              {activeSection === "dashboard" && (
+                <div>
+                  <div className="row g-4 mb-4">
+                    <StatCard
+                      title="Total Students"
+                      number={totalStudents}
+                      label="Registered students"
+                    />
+                    <StatCard
+                      title="Clinic Visits"
+                      number={totalVisits}
+                      label="Recorded visits"
+                    />
+                    <StatCard
+                      title="Medicines"
+                      number={totalMedicines}
+                      label="Available medicines"
+                    />
+                    <StatCard
+                      title="Low Stock"
+                      number={lowStock}
+                      label="Need attention"
+                    />
+                  </div>
 
-        <div className="content">
+                  <div className="row g-4">
+                    <QuickAction
+                      icon="bi-person-plus"
+                      title="Add Student"
+                      description="Register a new student"
+                      onClick={openStudentModal}
+                    />
 
-          {/* ====================================
-              DASHBOARD
-          ==================================== */}
+                    <QuickAction
+                      icon="bi-heart-pulse"
+                      title="New Clinic Visit"
+                      description="Record a clinic visit"
+                      onClick={openVisitModal}
+                    />
 
-          {activeSection ===
-            "dashboard" && (
-            <div className="page-view">
+                    <QuickAction
+                      icon="bi-capsule"
+                      title="Add Medicine"
+                      description="Update medicine inventory"
+                      onClick={openMedicineModal}
+                    />
+                  </div>
 
-              {/* STAT CARDS */}
+                  <div className="row g-4 mt-2">
+                    <div className="col-lg-7">
+                      <div className="card p-4">
+                        <h5 className="fw-bold">
+                          Recent Clinic Visits
+                        </h5>
+                        <p className="text-muted">
+                          Latest recorded clinic visits.
+                        </p>
 
-              <div className="row g-4 mb-4">
-
-                <StatCard
-                  title="Total Students"
-                  number={totalStudents.toLocaleString()}
-                  label="Registered students"
-                />
-
-                <StatCard
-                  title="Clinic Visits"
-                  number={
-                    totalVisits
-                  }
-                  label="Recorded visits"
-                />
-
-                <StatCard
-                  title="Medicines"
-                  number={
-                    totalMedicines
-                  }
-                  label="Medicine items"
-                />
-
-                <StatCard
-                  title="Low Stock"
-                  number={
-                    lowStock
-                  }
-                  label="Need attention"
-                />
-
-              </div>
-
-              {/* QUICK ACTIONS */}
-
-              <div className="card p-4 mb-4">
-
-                <h5 className="fw-bold mb-3">
-                  Quick Actions
-                </h5>
-
-                <div className="row g-3">
-
-                  <QuickAction
-                    icon="bi-person-plus"
-                    title="Add Student"
-                    description="Register a new student"
-                    onClick={
-                      openStudentModal
-                    }
-                  />
-
-                  <QuickAction
-                    icon="bi-heart-pulse"
-                    title="Record Visit"
-                    description="Record a clinic visit"
-                    onClick={
-                      openVisitModal
-                    }
-                  />
-
-                  <QuickAction
-                    icon="bi-capsule"
-                    title="Add Medicine"
-                    description="Add medicine to inventory"
-                    onClick={
-                      openMedicineModal
-                    }
-                  />
-
-                </div>
-              </div>
-
-              {/* RECENT VISITS */}
-
-              <div className="row g-4">
-
-                <div className="col-lg-7">
-
-                  <div className="card p-4">
-
-                    <div className="d-flex justify-content-between align-items-center mb-3">
-
-                      <h5 className="fw-bold mb-0">
-                        Recent Clinic Visits
-                      </h5>
-
-                      <button
-                        className="btn btn-light-green btn-sm"
-                        onClick={() =>
-                          showSection(
-                            "visits"
-                          )
-                        }
-                      >
-                        View All
-                      </button>
-
-                    </div>
-
-                    <div className="table-responsive">
-
-                      <table className="table align-middle">
-
-                        <thead>
-
-                          <tr>
-                            <th>
-                              Student
-                            </th>
-
-                            <th>
-                              Complaint
-                            </th>
-
-                            <th>
-                              Date
-                            </th>
-
-                            <th>
-                              Status
-                            </th>
-                          </tr>
-
-                        </thead>
-
-                        <tbody>
-
-                          {visits.length ===
-                          0 ? (
-                            <tr>
-                              <td
-                                colSpan="4"
-                                className="text-center text-muted"
-                              >
-                                No clinic visits recorded.
-                              </td>
-                            </tr>
-                          ) : (
-                            visits
-                              .slice(
-                                -5
-                              )
-                              .reverse()
-                              .map(
-                                (
-                                  visit
-                                ) => (
-                                  <tr
-                                    key={
-                                      visit.id
-                                    }
+                        <div className="table-responsive">
+                          <table className="table align-middle">
+                            <thead>
+                              <tr>
+                                <th>Student</th>
+                                <th>Complaint</th>
+                                <th>Date</th>
+                                <th>Status</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {visits.slice(0, 5).length === 0 ? (
+                                <tr>
+                                  <td
+                                    colSpan="4"
+                                    className="text-center text-muted"
                                   >
-
-                                    <td>
-                                      {
-                                        visit.student
-                                      }
-                                    </td>
-
-                                    <td>
-                                      {
-                                        visit.complaint
-                                      }
-                                    </td>
-
-                                    <td>
-                                      {
-                                        visit.date
-                                      }
-                                    </td>
-
+                                    No clinic visits recorded.
+                                  </td>
+                                </tr>
+                              ) : (
+                                visits.slice(0, 5).map((visit) => (
+                                  <tr key={visit.id}>
+                                    <td>{visit.student}</td>
+                                    <td>{visit.complaint}</td>
+                                    <td>{visit.date}</td>
                                     <td>
                                       <span className="badge badge-info">
-                                        {
-                                          visit.status
-                                        }
+                                        {visit.status}
                                       </span>
                                     </td>
-
                                   </tr>
-                                )
-                              )
-                          )}
+                                ))
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
 
-                        </tbody>
+                        <button
+                          className="btn btn-light-green"
+                          onClick={() => showSection("visits")}
+                        >
+                          View All Visits
+                        </button>
+                      </div>
+                    </div>
 
-                      </table>
+                    <div className="col-lg-5">
+                      <div className="card p-4">
+                        <h5 className="fw-bold">Low Stock</h5>
+                        <p className="text-muted">
+                          Medicines that need attention.
+                        </p>
 
+                        {lowStockMedicines.length === 0 ? (
+                          <div className="text-muted py-3">
+                            No medicines are low in stock.
+                          </div>
+                        ) : (
+                          lowStockMedicines.slice(0, 5).map((medicine) => (
+                            <div
+                              key={medicine.id}
+                              className="d-flex justify-content-between border-bottom py-3"
+                            >
+                              <span>{medicine.name}</span>
+                              <span className="badge badge-low">
+                                {medicine.stock} left
+                              </span>
+                            </div>
+                          ))
+                        )}
+
+                        <button
+                          className="btn btn-light-green w-100 mt-3"
+                          onClick={() => showSection("stock")}
+                        >
+                          View Inventory
+                          <i className="bi bi-arrow-right ms-1"></i>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
+              )}
 
-                {/* LOW STOCK */}
+              {activeSection === "students" && (
+                <StudentsSection
+                  students={students}
+                  onAdd={openStudentModal}
+                  onDelete={deleteStudent}
+                />
+              )}
 
-                <div className="col-lg-5">
+              {activeSection === "visits" && (
+                <VisitsSection
+                  visits={visits}
+                  onAdd={openVisitModal}
+                  onDelete={deleteVisit}
+                />
+              )}
 
-                  <div className="card p-4">
+              {activeSection === "records" && (
+                <MedicalRecords
+                  records={medicalRecords}
+                  search={recordSearch}
+                  setSearch={setRecordSearch}
+                  onAdd={openMedicalRecordModal}
+                  onDelete={deleteMedicalRecord}
+                />
+              )}
 
-                    <h5 className="fw-bold">
-                      Low Stock
-                    </h5>
+              {activeSection === "medicines" && (
+                <InventorySection
+                  medicines={medicines}
+                  onAdd={openMedicineModal}
+                  onEdit={editMedicine}
+                  onDelete={deleteMedicine}
+                />
+              )}
 
-                    <p className="text-muted">
-                      Medicines that need attention.
-                    </p>
+              {activeSection === "stock" && (
+                <StockManagement
+                  medicines={medicines}
+                  movements={stockManagement}
+                  onAdd={openStockModal}
+                />
+              )}
 
-                    {lowStockMedicines.length ===
-                    0 ? (
-                      <div className="text-muted py-3">
-                        No newly added medicines are low in stock.
+              {activeSection === "reports" && (
+                <ReportsSection
+                  students={totalStudents}
+                  visits={totalVisits}
+                  medicines={totalMedicines}
+                  lowStock={lowStock}
+                />
+              )}
+
+              {activeSection === "users" && (
+                <div className="card p-4">
+                  <h5 className="fw-bold">User Management</h5>
+
+                  <div className="p-3 rounded-3 my-3 user-info">
+                    <div className="d-flex align-items-center gap-3">
+                      <div className="admin-avatar">
+                        <i className="bi bi-person"></i>
                       </div>
-                    ) : (
-                      lowStockMedicines
-                        .slice(
-                          0,
-                          5
-                        )
-                        .map(
-                          (
-                            medicine
-                          ) => (
-                            <div
-                              key={
-                                medicine.id
-                              }
-                              className="d-flex justify-content-between border-bottom py-3"
-                            >
-                              <span>
-                                {
-                                  medicine.name
-                                }
-                              </span>
-
-                              <span className="badge badge-low">
-                                Low
-                              </span>
-                            </div>
-                          )
-                        )
-                    )}
-
-                    <button
-                      className="btn btn-light-green w-100 mt-3"
-                      onClick={() =>
-                        showSection(
-                          "stock"
-                        )
-                      }
-                    >
-                      View Inventory
-                      <i className="bi bi-arrow-right ms-1"></i>
-                    </button>
-
-                  </div>
-                </div>
-
-              </div>
-
-              {/* MEDICINE INVENTORY */}
-
-              <div className="card p-4 mt-4">
-
-                <div className="d-flex justify-content-between align-items-center">
-
-                  <div>
-
-                    <h5 className="fw-bold mb-1">
-                      Medicine Inventory
-                    </h5>
-
-                    <p className="text-muted mb-0">
-                      Manage medicines and stock.
-                    </p>
-
+                      <div>
+                        <strong>{loggedInUser}</strong>
+                        <br />
+                        <small className="text-muted">
+                          System Administrator
+                        </small>
+                      </div>
+                    </div>
                   </div>
 
                   <button
-                    className="btn btn-green btn-sm"
-                    onClick={
-                      openMedicineModal
+                    className="btn btn-light-green"
+                    onClick={() =>
+                      alert("Administrator has full system access.")
                     }
                   >
-                    <i className="bi bi-plus-lg me-1"></i>
-                    Add Medicine
+                    <i className="bi bi-shield-check me-1"></i>
+                    Check Permissions
                   </button>
-
                 </div>
+              )}
 
-              </div>
-
-            </div>
+              {activeSection === "settings" && (
+                <SettingsSection onClear={clearAllData} />
+              )}
+            </>
           )}
-
-          {/* ====================================
-              STUDENTS
-          ==================================== */}
-
-          {activeSection ===
-            "students" && (
-            <StudentsSection
-              students={
-                students
-              }
-              onAdd={
-                openStudentModal
-              }
-              onDelete={
-                deleteStudent
-              }
-            />
-          )}
-
-          {/* ====================================
-              VISITS
-          ==================================== */}
-
-          {activeSection ===
-            "visits" && (
-            <VisitsSection
-              visits={
-                visits
-              }
-              onAdd={
-                openVisitModal
-              }
-              onDelete={
-                deleteVisit
-              }
-            />
-          )}
-
-          {/* ====================================
-              MEDICAL RECORDS
-          ==================================== */}
-
-          {activeSection ===
-            "records" && (
-            <MedicalRecords
-              visits={
-                visits
-              }
-              search={
-                recordSearch
-              }
-              setSearch={
-                setRecordSearch
-              }
-            />
-          )}
-
-          {/* ====================================
-              MEDICINES
-          ==================================== */}
-
-          {(activeSection ===
-            "medicines" ||
-            activeSection ===
-              "stock") && (
-            <InventorySection
-              medicines={
-                medicines
-              }
-              onAdd={
-                openMedicineModal
-              }
-              onEdit={
-                editMedicine
-              }
-              onDelete={
-                deleteMedicine
-              }
-            />
-          )}
-
-          {/* ====================================
-              REPORTS
-          ==================================== */}
-
-          {activeSection ===
-            "reports" && (
-            <ReportsSection
-              students={
-                totalStudents
-              }
-              visits={
-                totalVisits
-              }
-              medicines={
-                totalMedicines
-              }
-              lowStock={
-                lowStock
-              }
-            />
-          )}
-
-          {/* ====================================
-              USERS
-          ==================================== */}
-
-          {activeSection ===
-            "users" && (
-            <div className="card p-4">
-
-              <h5 className="fw-bold">
-                User Management
-              </h5>
-
-              <div className="p-3 rounded-3 my-3 user-info">
-
-                <div className="d-flex align-items-center gap-3">
-
-                  <div className="admin-avatar">
-                    <i className="bi bi-person"></i>
-                  </div>
-
-                  <div>
-
-                    <strong>
-                      {
-                        loggedInUser
-                      }
-                    </strong>
-
-                    <br />
-
-                    <small className="text-muted">
-                      System Administrator
-                    </small>
-
-                  </div>
-
-                </div>
-
-              </div>
-
-              <button
-                className="btn btn-light-green"
-                onClick={() =>
-                  alert(
-                    "Administrator has full system access."
-                  )
-                }
-              >
-                <i className="bi bi-shield-check me-1"></i>
-                Check Permissions
-              </button>
-
-            </div>
-          )}
-
-          {/* ====================================
-              SETTINGS
-          ==================================== */}
-
-          {activeSection ===
-            "settings" && (
-            <SettingsSection
-              onClear={
-                async () => {
-                  const confirmed =
-                    window.confirm(
-                      "WARNING!\n\nThis will delete ALL students, clinic visits, and medicines from the backend.\n\nAre you sure?"
-                    );
-
-                  if (
-                    !confirmed
-                  )
-                    return;
-
-                  try {
-                    const response =
-                      await fetch(
-                        `${API_BASE}/clinic-data`,
-                        {
-                          method:
-                            "DELETE",
-                        }
-                      );
-
-                    const result =
-                      await response.json();
-
-                    if (
-                      !response.ok
-                    ) {
-                      throw new Error(
-                        result.message ||
-                          "Failed to clear data"
-                      );
-                    }
-
-                    setStudents(
-                      []
-                    );
-
-                    setVisits(
-                      []
-                    );
-
-                    setMedicines(
-                      []
-                    );
-
-                    alert(
-                      "All clinic data has been deleted from the backend."
-                    );
-                  } catch (error) {
-                    console.error(
-                      "Clear data error:",
-                      error
-                    );
-
-                    alert(
-                      "The clinic data could not be cleared. Make sure the backend is running."
-                    );
-                  }
-                }
-              }
-            />
-          )}
-
         </div>
       </main>
 
       {/* ======================================
-          ADD STUDENT MODAL
+          STUDENT MODAL
       ====================================== */}
 
-      {modal ===
-        "student" && (
+      {modal === "student" && (
         <Modal
           title="Add New Student"
-          onClose={() =>
-            setModal(null)
-          }
-          onSave={
-            addStudent
-          }
+          onClose={() => setModal(null)}
+          onSave={addStudent}
           saveText="Add Student"
         >
-
           <FormField
             label="Student ID"
             type="text"
             placeholder="2026-001"
-            value={
-              studentForm.id
-            }
+            value={studentForm.id}
             onChange={(value) =>
-              setStudentForm(
-                {
-                  ...studentForm,
-                  id: value,
-                }
-              )
+              setStudentForm({ ...studentForm, id: value })
             }
           />
 
@@ -1714,16 +999,9 @@ function Dashboard() {
             label="Full Name"
             type="text"
             placeholder="Juan Dela Cruz"
-            value={
-              studentForm.name
-            }
+            value={studentForm.name}
             onChange={(value) =>
-              setStudentForm(
-                {
-                  ...studentForm,
-                  name: value,
-                }
-              )
+              setStudentForm({ ...studentForm, name: value })
             }
           />
 
@@ -1731,16 +1009,9 @@ function Dashboard() {
             label="Grade & Section"
             type="text"
             placeholder="Grade 7-A"
-            value={
-              studentForm.grade
-            }
+            value={studentForm.grade}
             onChange={(value) =>
-              setStudentForm(
-                {
-                  ...studentForm,
-                  grade: value,
-                }
-              )
+              setStudentForm({ ...studentForm, grade: value })
             }
           />
 
@@ -1748,53 +1019,32 @@ function Dashboard() {
             label="Contact Number"
             type="text"
             placeholder="09XXXXXXXXX"
-            value={
-              studentForm.contact
-            }
+            value={studentForm.contact}
             onChange={(value) =>
-              setStudentForm(
-                {
-                  ...studentForm,
-                  contact: value,
-                }
-              )
+              setStudentForm({ ...studentForm, contact: value })
             }
           />
-
         </Modal>
       )}
 
       {/* ======================================
-          VISIT MODAL
+          CLINIC VISIT MODAL
       ====================================== */}
 
-      {modal ===
-        "visit" && (
+      {modal === "visit" && (
         <Modal
           title="Record Clinic Visit"
-          onClose={() =>
-            setModal(null)
-          }
-          onSave={
-            addVisit
-          }
+          onClose={() => setModal(null)}
+          onSave={addVisit}
           saveText="Save Visit"
         >
-
           <FormField
             label="Student Name"
             type="text"
             placeholder="Student name"
-            value={
-              visitForm.student
-            }
+            value={visitForm.student}
             onChange={(value) =>
-              setVisitForm(
-                {
-                  ...visitForm,
-                  student: value,
-                }
-              )
+              setVisitForm({ ...visitForm, student: value })
             }
           />
 
@@ -1802,83 +1052,45 @@ function Dashboard() {
             label="Complaint"
             type="text"
             placeholder="Headache, Fever, etc."
-            value={
-              visitForm.complaint
-            }
+            value={visitForm.complaint}
             onChange={(value) =>
-              setVisitForm(
-                {
-                  ...visitForm,
-                  complaint: value,
-                }
-              )
+              setVisitForm({ ...visitForm, complaint: value })
             }
           />
 
           <div className="mb-3">
-
-            <label className="form-label">
-              Treatment
-            </label>
-
+            <label className="form-label">Treatment</label>
             <textarea
               className="form-control"
               rows="3"
               placeholder="Treatment given"
-              value={
-                visitForm.treatment
-              }
+              value={visitForm.treatment}
               onChange={(e) =>
-                setVisitForm(
-                  {
-                    ...visitForm,
-                    treatment:
-                      e.target.value,
-                  }
-                )
+                setVisitForm({
+                  ...visitForm,
+                  treatment: e.target.value,
+                })
               }
             ></textarea>
-
           </div>
 
           <div className="mb-3">
-
-            <label className="form-label">
-              Status
-            </label>
-
+            <label className="form-label">Status</label>
             <select
               className="form-select"
-              value={
-                visitForm.status
-              }
+              value={visitForm.status}
               onChange={(e) =>
-                setVisitForm(
-                  {
-                    ...visitForm,
-                    status:
-                      e.target.value,
-                  }
-                )
+                setVisitForm({
+                  ...visitForm,
+                  status: e.target.value,
+                })
               }
             >
-
-              <option value="Treated">
-                Treated
-              </option>
-
-              <option value="Observation">
-                Observation
-              </option>
-
-              <option value="Referred">
-                Referred
-              </option>
-
+              <option value="Treated">Treated</option>
+              <option value="Observation">Observation</option>
+              <option value="Referred">Referred</option>
             </select>
-
           </div>
-
         </Modal>
       )}
 
@@ -1886,33 +1098,20 @@ function Dashboard() {
           ADD MEDICINE MODAL
       ====================================== */}
 
-      {modal ===
-        "medicine" && (
+      {modal === "medicine" && (
         <Modal
           title="Add Medicine"
-          onClose={() =>
-            setModal(null)
-          }
-          onSave={
-            addMedicine
-          }
+          onClose={() => setModal(null)}
+          onSave={addMedicine}
           saveText="Add Medicine"
         >
-
           <FormField
             label="Medicine Name"
             type="text"
             placeholder="Paracetamol"
-            value={
-              medicineForm.name
-            }
+            value={medicineForm.name}
             onChange={(value) =>
-              setMedicineForm(
-                {
-                  ...medicineForm,
-                  name: value,
-                }
-              )
+              setMedicineForm({ ...medicineForm, name: value })
             }
           />
 
@@ -1920,17 +1119,9 @@ function Dashboard() {
             label="Category"
             type="text"
             placeholder="Pain Reliever"
-            value={
-              medicineForm.category
-            }
+            value={medicineForm.category}
             onChange={(value) =>
-              setMedicineForm(
-                {
-                  ...medicineForm,
-                  category:
-                    value,
-                }
-              )
+              setMedicineForm({ ...medicineForm, category: value })
             }
           />
 
@@ -1938,35 +1129,20 @@ function Dashboard() {
             label="Stock Quantity"
             type="number"
             placeholder="50"
-            value={
-              medicineForm.stock
-            }
+            value={medicineForm.stock}
             onChange={(value) =>
-              setMedicineForm(
-                {
-                  ...medicineForm,
-                  stock: value,
-                }
-              )
+              setMedicineForm({ ...medicineForm, stock: value })
             }
           />
 
           <FormField
             label="Expiration Date"
             type="date"
-            value={
-              medicineForm.expiry
-            }
+            value={medicineForm.expiry}
             onChange={(value) =>
-              setMedicineForm(
-                {
-                  ...medicineForm,
-                  expiry: value,
-                }
-              )
+              setMedicineForm({ ...medicineForm, expiry: value })
             }
           />
-
         </Modal>
       )}
 
@@ -1974,152 +1150,242 @@ function Dashboard() {
           EDIT MEDICINE MODAL
       ====================================== */}
 
-      {modal ===
-        "medicine-edit" && (
+      {modal === "medicine-edit" && (
         <Modal
           title="Edit Medicine"
-          onClose={() =>
-            setModal(null)
-          }
-          onSave={
-            updateMedicine
-          }
+          onClose={() => setModal(null)}
+          onSave={updateMedicine}
           saveText="Save Changes"
         >
-
           <FormField
             label="Medicine Name"
             type="text"
-            placeholder="Paracetamol"
-            value={
-              medicineForm.name
-            }
+            value={medicineForm.name}
             onChange={(value) =>
-              setMedicineForm(
-                {
-                  ...medicineForm,
-                  name: value,
-                }
-              )
+              setMedicineForm({ ...medicineForm, name: value })
             }
           />
 
           <FormField
             label="Category"
             type="text"
-            placeholder="Pain Reliever"
-            value={
-              medicineForm.category
-            }
+            value={medicineForm.category}
             onChange={(value) =>
-              setMedicineForm(
-                {
-                  ...medicineForm,
-                  category:
-                    value,
-                }
-              )
+              setMedicineForm({ ...medicineForm, category: value })
             }
           />
 
           <FormField
             label="Stock Quantity"
             type="number"
-            placeholder="50"
-            value={
-              medicineForm.stock
-            }
+            value={medicineForm.stock}
             onChange={(value) =>
-              setMedicineForm(
-                {
-                  ...medicineForm,
-                  stock: value,
-                }
-              )
+              setMedicineForm({ ...medicineForm, stock: value })
             }
           />
 
           <FormField
             label="Expiration Date"
             type="date"
-            value={
-              medicineForm.expiry
-            }
+            value={medicineForm.expiry}
             onChange={(value) =>
-              setMedicineForm(
-                {
-                  ...medicineForm,
-                  expiry: value,
-                }
-              )
+              setMedicineForm({ ...medicineForm, expiry: value })
             }
           />
-
         </Modal>
       )}
 
       {/* ======================================
-          NOTIFICATIONS
+          MEDICAL RECORD MODAL
       ====================================== */}
 
-      {modal ===
-        "notifications" && (
+      {modal === "medical-record" && (
         <Modal
-          title="Notifications"
-          onClose={() =>
-            setModal(null)
-          }
-          onSave={() =>
-            setModal(null)
-          }
-          saveText="Close"
+          title="Add Medical Record"
+          onClose={() => setModal(null)}
+          onSave={addMedicalRecord}
+          saveText="Save Record"
         >
-
-          <div className="notification-box warning">
-
-            <i className="bi bi-exclamation-triangle me-2"></i>
-
-            <strong>
-              Low Stock Alert
-            </strong>
-
-            <br />
-
-            {lowStock} medicines need attention.
-
+          <div className="mb-3">
+            <label className="form-label">Student</label>
+            <select
+              className="form-select"
+              value={medicalRecordForm.student_id}
+              onChange={(e) =>
+                setMedicalRecordForm({
+                  ...medicalRecordForm,
+                  student_id: e.target.value,
+                })
+              }
+            >
+              <option value="">Select student</option>
+              {students.map((student) => (
+                <option key={student.id} value={student.id}>
+                  {student.name} ({student.student_code || student.id})
+                </option>
+              ))}
+            </select>
           </div>
 
-          <div className="notification-box info">
+          <FormField
+            label="Diagnosis"
+            type="text"
+            placeholder="Enter diagnosis"
+            value={medicalRecordForm.diagnosis}
+            onChange={(value) =>
+              setMedicalRecordForm({
+                ...medicalRecordForm,
+                diagnosis: value,
+              })
+            }
+          />
 
-            <i className="bi bi-heart-pulse me-2"></i>
+          <FormField
+            label="Treatment"
+            type="text"
+            placeholder="Treatment given"
+            value={medicalRecordForm.treatment}
+            onChange={(value) =>
+              setMedicalRecordForm({
+                ...medicalRecordForm,
+                treatment: value,
+              })
+            }
+          />
 
-            <strong>
-              Clinic Visits
-            </strong>
+          <FormField
+            label="Record Date"
+            type="date"
+            value={medicalRecordForm.record_date}
+            onChange={(value) =>
+              setMedicalRecordForm({
+                ...medicalRecordForm,
+                record_date: value,
+              })
+            }
+          />
 
-            <br />
-
-            {totalVisits} clinic visits recorded.
-
+          <div className="mb-3">
+            <label className="form-label">Notes</label>
+            <textarea
+              className="form-control"
+              rows="3"
+              value={medicalRecordForm.notes}
+              onChange={(e) =>
+                setMedicalRecordForm({
+                  ...medicalRecordForm,
+                  notes: e.target.value,
+                })
+              }
+            ></textarea>
           </div>
-
-          <div className="notification-box success">
-
-            <i className="bi bi-check-circle me-2"></i>
-
-            <strong>
-              System Status
-            </strong>
-
-            <br />
-
-            School clinic system is running normally.
-
-          </div>
-
         </Modal>
       )}
 
+      {/* ======================================
+          STOCK MOVEMENT MODAL
+      ====================================== */}
+
+      {modal === "stock" && (
+        <Modal
+          title="Record Stock Movement"
+          onClose={() => setModal(null)}
+          onSave={addStockMovement}
+          saveText="Save Movement"
+        >
+          <div className="mb-3">
+            <label className="form-label">Medicine</label>
+            <select
+              className="form-select"
+              value={stockForm.medicine_id}
+              onChange={(e) =>
+                setStockForm({
+                  ...stockForm,
+                  medicine_id: e.target.value,
+                })
+              }
+            >
+              <option value="">Select medicine</option>
+              {medicines.map((medicine) => (
+                <option key={medicine.id} value={medicine.id}>
+                  {medicine.name} (Current stock: {medicine.stock})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="mb-3">
+            <label className="form-label">Movement Type</label>
+            <select
+              className="form-select"
+              value={stockForm.movement_type}
+              onChange={(e) =>
+                setStockForm({
+                  ...stockForm,
+                  movement_type: e.target.value,
+                })
+              }
+            >
+              <option value="Stock In">Stock In</option>
+              <option value="Stock Out">Stock Out</option>
+            </select>
+          </div>
+
+          <FormField
+            label="Quantity"
+            type="number"
+            placeholder="Enter quantity"
+            value={stockForm.quantity}
+            onChange={(value) =>
+              setStockForm({ ...stockForm, quantity: value })
+            }
+          />
+
+          <FormField
+            label="Reason"
+            type="text"
+            placeholder="Reason for stock movement"
+            value={stockForm.reason}
+            onChange={(value) =>
+              setStockForm({ ...stockForm, reason: value })
+            }
+          />
+        </Modal>
+      )}
+
+      {/* ======================================
+          NOTIFICATIONS MODAL
+      ====================================== */}
+
+      {modal === "notifications" && (
+        <Modal
+          title="Notifications"
+          onClose={() => setModal(null)}
+          onSave={() => setModal(null)}
+          saveText="Close"
+        >
+          <div className="notification-box warning">
+            <i className="bi bi-exclamation-triangle me-2"></i>
+            <strong>Low Stock Alert</strong>
+            <br />
+            {lowStock} medicines need attention.
+          </div>
+
+          <div className="notification-box info">
+            <i className="bi bi-heart-pulse me-2"></i>
+            <strong>Clinic Visits</strong>
+            <br />
+            {totalVisits} clinic visits recorded.
+          </div>
+
+          <div className="notification-box success">
+            <i className="bi bi-check-circle me-2"></i>
+            <strong>System Status</strong>
+            <br />
+            School clinic system is running normally.
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -2137,28 +1403,15 @@ function FormField({
 }) {
   return (
     <div className="mb-3">
-
-      <label className="form-label">
-        {label}
-      </label>
-
+      <label className="form-label">{label}</label>
       <input
         type={type}
         className="form-control"
         placeholder={placeholder}
-        min={
-          type === "number"
-            ? "0"
-            : undefined
-        }
+        min={type === "number" ? "0" : undefined}
         value={value}
-        onChange={(e) =>
-          onChange(
-            e.target.value
-          )
-        }
+        onChange={(e) => onChange(e.target.value)}
       />
-
     </div>
   );
 }
@@ -2167,30 +1420,14 @@ function FormField({
 // STAT CARD
 // ==========================================
 
-function StatCard({
-  title,
-  number,
-  label,
-}) {
+function StatCard({ title, number, label }) {
   return (
     <div className="col-md-3">
-
       <div className="card p-4">
-
-        <div className="text-muted mb-2">
-          {title}
-        </div>
-
-        <div className="stat-number">
-          {number}
-        </div>
-
-        <div className="stat-label">
-          {label}
-        </div>
-
+        <div className="text-muted mb-2">{title}</div>
+        <div className="stat-number">{number}</div>
+        <div className="stat-label">{label}</div>
       </div>
-
     </div>
   );
 }
@@ -2207,33 +1444,24 @@ function QuickAction({
 }) {
   return (
     <div className="col-md-4">
-
       <div
         className="quick-action border rounded-3 p-3 d-flex align-items-center gap-3"
         onClick={onClick}
         role="button"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") onClick();
+        }}
       >
-
         <div className="action-icon">
-          <i
-            className={`bi ${icon}`}
-          ></i>
+          <i className={`bi ${icon}`}></i>
         </div>
 
         <div>
-
-          <strong>
-            {title}
-          </strong>
-
-          <div className="text-muted small">
-            {description}
-          </div>
-
+          <strong>{title}</strong>
+          <div className="text-muted small">{description}</div>
         </div>
-
       </div>
-
     </div>
   );
 }
@@ -2254,40 +1482,28 @@ function Modal({
       className="modal-backdrop-custom"
       onClick={onClose}
     >
-
       <div
         className="modal-dialog-custom clinic-form-dialog"
-        onClick={(e) =>
-          e.stopPropagation()
-        }
+        onClick={(e) => e.stopPropagation()}
       >
-
         <div className="modal-content clinic-form-modal">
-
           <div className="modal-header">
-
-            <h5 className="modal-title fw-bold">
-              {title}
-            </h5>
+            <h5 className="modal-title fw-bold">{title}</h5>
 
             <button
               type="button"
               className="btn-close"
               onClick={onClose}
             ></button>
-
           </div>
 
           <div className="modal-body clinic-form-body">
-
             <div className="clinic-form-fields">
               {children}
             </div>
-
           </div>
 
           <div className="modal-footer">
-
             <button
               type="button"
               className="btn btn-light-green"
@@ -2303,13 +1519,9 @@ function Modal({
             >
               {saveText}
             </button>
-
           </div>
-
         </div>
-
       </div>
-
     </div>
   );
 }
@@ -2325,37 +1537,23 @@ function StudentsSection({
 }) {
   return (
     <div className="card p-4">
-
       <div className="d-flex justify-content-between align-items-center mb-3">
-
         <div>
-
-          <h5 className="fw-bold mb-1">
-            Student Records
-          </h5>
-
+          <h5 className="fw-bold mb-1">Student Records</h5>
           <p className="text-muted mb-0">
             Manage registered students.
           </p>
-
         </div>
 
-        <button
-          className="btn btn-green"
-          onClick={onAdd}
-        >
+        <button className="btn btn-green" onClick={onAdd}>
           <i className="bi bi-person-plus me-1"></i>
           Add Student
         </button>
-
       </div>
 
       <div className="table-responsive">
-
         <table className="table align-middle">
-
           <thead>
-
             <tr>
               <th>ID</th>
               <th>Name</th>
@@ -2363,83 +1561,37 @@ function StudentsSection({
               <th>Contact</th>
               <th>Action</th>
             </tr>
-
           </thead>
 
           <tbody>
-
-            {students.length ===
-            0 ? (
+            {students.length === 0 ? (
               <tr>
-
-                <td
-                  colSpan="5"
-                  className="text-center text-muted"
-                >
+                <td colSpan="5" className="text-center text-muted">
                   No students added yet.
                 </td>
-
               </tr>
             ) : (
-              students.map(
-                (student) => (
-                  <tr
-                    key={
-                      student.id
-                    }
-                  >
-
-                    <td>
-                      {
-                        student.id
-                      }
-                    </td>
-
-                    <td>
-                      {
-                        student.name
-                      }
-                    </td>
-
-                    <td>
-                      {
-                        student.grade
-                      }
-                    </td>
-
-                    <td>
-                      {
-                        student.contact ||
-                        "-"
-                      }
-                    </td>
-
-                    <td>
-
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-danger"
-                        onClick={() =>
-                          onDelete(
-                            student.id
-                          )
-                        }
-                      >
-                        <i className="bi bi-trash me-1"></i>
-                        Delete
-                      </button>
-
-                    </td>
-
-                  </tr>
-                )
-              )
+              students.map((student) => (
+                <tr key={student.id}>
+                  <td>{student.student_code || student.id}</td>
+                  <td>{student.name}</td>
+                  <td>{student.grade}</td>
+                  <td>{student.contact || "-"}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-danger"
+                      onClick={() => onDelete(student.id)}
+                    >
+                      <i className="bi bi-trash me-1"></i>
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))
             )}
-
           </tbody>
-
         </table>
-
       </div>
     </div>
   );
@@ -2456,37 +1608,23 @@ function VisitsSection({
 }) {
   return (
     <div className="card p-4">
-
       <div className="d-flex justify-content-between align-items-center mb-3">
-
         <div>
-
-          <h5 className="fw-bold mb-1">
-            Clinic Visits
-          </h5>
-
+          <h5 className="fw-bold mb-1">Clinic Visits</h5>
           <p className="text-muted mb-0">
             View recorded clinic visits.
           </p>
-
         </div>
 
-        <button
-          className="btn btn-green"
-          onClick={onAdd}
-        >
+        <button className="btn btn-green" onClick={onAdd}>
           <i className="bi bi-plus-lg me-1"></i>
           Record Visit
         </button>
-
       </div>
 
       <div className="table-responsive">
-
         <table className="table align-middle">
-
           <thead>
-
             <tr>
               <th>Student</th>
               <th>Complaint</th>
@@ -2495,211 +1633,148 @@ function VisitsSection({
               <th>Status</th>
               <th>Action</th>
             </tr>
-
           </thead>
 
           <tbody>
-
-            {visits.length ===
-            0 ? (
+            {visits.length === 0 ? (
               <tr>
-
-                <td
-                  colSpan="6"
-                  className="text-center text-muted"
-                >
+                <td colSpan="6" className="text-center text-muted">
                   No clinic visits recorded.
                 </td>
-
               </tr>
             ) : (
-              visits.map(
-                (visit) => (
-                  <tr
-                    key={
-                      visit.id
-                    }
-                  >
-
-                    <td>
-                      {
-                        visit.student
-                      }
-                    </td>
-
-                    <td>
-                      {
-                        visit.complaint
-                      }
-                    </td>
-
-                    <td>
-                      {
-                        visit.treatment ||
-                        "-"
-                      }
-                    </td>
-
-                    <td>
-                      {
-                        visit.date
-                      }
-                    </td>
-
-                    <td>
-
-                      <span className="badge badge-info">
-                        {
-                          visit.status
-                        }
-                      </span>
-
-                    </td>
-
-                    <td>
-
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-danger"
-                        onClick={() =>
-                          onDelete(
-                            visit.id
-                          )
-                        }
-                      >
-                        <i className="bi bi-trash"></i>
-                      </button>
-
-                    </td>
-
-                  </tr>
-                )
-              )
+              visits.map((visit) => (
+                <tr key={visit.id}>
+                  <td>{visit.student}</td>
+                  <td>{visit.complaint}</td>
+                  <td>{visit.treatment || "-"}</td>
+                  <td>{visit.date}</td>
+                  <td>
+                    <span className="badge badge-info">
+                      {visit.status}
+                    </span>
+                  </td>
+                  <td>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-danger"
+                      onClick={() => onDelete(visit.id)}
+                    >
+                      <i className="bi bi-trash"></i>
+                    </button>
+                  </td>
+                </tr>
+              ))
             )}
-
           </tbody>
-
         </table>
-
       </div>
     </div>
   );
 }
 
 // ==========================================
-// MEDICAL RECORDS
+// MEDICAL RECORDS SECTION
 // ==========================================
 
 function MedicalRecords({
-  visits,
+  records,
   search,
   setSearch,
+  onAdd,
+  onDelete,
 }) {
-  const results =
-    visits.filter(
-      (visit) =>
-        String(
-          visit.student || ""
-        )
-          .toLowerCase()
-          .includes(
-            search.toLowerCase()
-          )
-    );
+  const results = records.filter((record) =>
+    `${record.student_name || ""} ${
+      record.student_code || ""
+    } ${record.diagnosis || ""}`
+      .toLowerCase()
+      .includes(search.toLowerCase())
+  );
 
   return (
     <div className="card p-4">
+      <div className="d-flex justify-content-between align-items-center mb-3">
+        <div>
+          <h5 className="fw-bold mb-1">Medical Records</h5>
+          <p className="text-muted mb-0">
+            Records saved in the medical_records MySQL table.
+          </p>
+        </div>
 
-      <h5 className="fw-bold mb-3">
-        Medical Records
-      </h5>
+        <button className="btn btn-green" onClick={onAdd}>
+          <i className="bi bi-plus-lg me-1"></i>
+          Add Medical Record
+        </button>
+      </div>
 
       <div className="input-group mb-4">
-
         <input
           type="text"
           className="form-control"
-          placeholder="Search student name"
+          placeholder="Search student or diagnosis"
           value={search}
-          onChange={(e) =>
-            setSearch(
-              e.target.value
-            )
-          }
+          onChange={(e) => setSearch(e.target.value)}
         />
-
-        <button className="btn btn-green">
-          Search
-        </button>
-
       </div>
 
-      {search === "" ? (
+      {results.length === 0 ? (
         <p className="text-muted">
-          Search for a student's medical history.
+          {search
+            ? "No matching medical records found."
+            : "No medical records have been added yet."}
         </p>
-      ) : results.length ===
-        0 ? (
-        <div className="alert alert-warning">
-          No medical records found.
-        </div>
       ) : (
-        results.map(
-          (record) => (
-            <div
-              key={
-                record.id
-              }
-              className="p-3 mb-2 rounded-3 medical-record"
-            >
+        results.map((record) => (
+          <div
+            key={record.id}
+            className="p-3 mb-2 rounded-3 medical-record"
+          >
+            <div className="d-flex justify-content-between align-items-start">
+              <div>
+                <strong>
+                  {record.student_name || "Unknown student"}
+                </strong>
 
-              <strong>
-                {
-                  record.student
-                }
-              </strong>
+                <small className="text-muted">
+                  {record.student_code
+                    ? ` (${record.student_code})`
+                    : ""}
+                </small>
 
-              <br />
+                <br />
+                Diagnosis: {record.diagnosis}
 
-              Complaint:{" "}
-              {
-                record.complaint
-              }
+                <br />
+                Treatment: {record.treatment || "None"}
 
-              <br />
+                {record.notes ? (
+                  <>
+                    <br />
+                    Notes: {record.notes}
+                  </>
+                ) : null}
 
-              Treatment:{" "}
-              {
-                record.treatment ||
-                "None"
-              }
+                <br />
+                <small>{record.record_date}</small>
+              </div>
 
-              <br />
-
-              Status:{" "}
-              {
-                record.status
-              }
-
-              <br />
-
-              <small>
-                {
-                  record.date
-                }
-              </small>
-
+              <button
+                className="btn btn-sm btn-danger"
+                onClick={() => onDelete(record.id)}
+              >
+                <i className="bi bi-trash"></i>
+              </button>
             </div>
-          )
-        )
+          </div>
+        ))
       )}
-
     </div>
   );
 }
 
 // ==========================================
-// INVENTORY SECTION
+// MEDICINE INVENTORY
 // ==========================================
 
 function InventorySection({
@@ -2710,190 +1785,199 @@ function InventorySection({
 }) {
   return (
     <div className="card p-4">
-
       <div className="d-flex justify-content-between align-items-center mb-3">
-
         <div>
-
-          <h5 className="fw-bold mb-1">
-            Medicine Inventory
-          </h5>
-
+          <h5 className="fw-bold mb-1">Medicine Inventory</h5>
           <p className="text-muted mb-0">
             Manage medicines and stock.
           </p>
-
         </div>
 
-        <button
-          className="btn btn-green"
-          onClick={onAdd}
-        >
+        <button className="btn btn-green" onClick={onAdd}>
           <i className="bi bi-plus-lg me-1"></i>
           Add Medicine
         </button>
-
       </div>
 
       <div className="table-responsive">
-
         <table className="table align-middle">
-
           <thead>
-
             <tr>
-
-              <th>
-                Medicine
-              </th>
-
-              <th>
-                Category
-              </th>
-
-              <th>
-                Stock
-              </th>
-
-              <th>
-                Expiration
-              </th>
-
-              <th>
-                Status
-              </th>
-
-              <th>
-                Action
-              </th>
-
+              <th>Medicine</th>
+              <th>Category</th>
+              <th>Stock</th>
+              <th>Expiration</th>
+              <th>Status</th>
+              <th>Action</th>
             </tr>
-
           </thead>
 
           <tbody>
-
-            {medicines.length ===
-            0 ? (
+            {medicines.length === 0 ? (
               <tr>
-
-                <td
-                  colSpan="6"
-                  className="text-center text-muted"
-                >
+                <td colSpan="6" className="text-center text-muted">
                   No medicines added yet.
                 </td>
-
               </tr>
             ) : (
-              medicines.map(
-                (medicine) => {
+              medicines.map((medicine) => {
+                const lowStock = Number(medicine.stock) <= 5;
 
-                  const lowStock =
-                    Number(
-                      medicine.stock
-                    ) <= 5;
-
-                  return (
-                    <tr
-                      key={
-                        medicine.id
-                      }
-                    >
-
-                      <td>
-                        <strong>
-                          {
-                            medicine.name
-                          }
-                        </strong>
-                      </td>
-
-                      <td>
-                        {
-                          medicine.category
-                        }
-                      </td>
-
-                      <td>
-                        {
-                          medicine.stock
-                        }
-                      </td>
-
-                      <td>
-                        {
-                          medicine.expiry ||
-                          "-"
-                        }
-                      </td>
-
-                      <td>
-
-                        <span
-                          className={`badge ${
-                            lowStock
-                              ? "badge-low"
-                              : "badge-good"
-                          }`}
+                return (
+                  <tr key={medicine.id}>
+                    <td>
+                      <strong>{medicine.name}</strong>
+                    </td>
+                    <td>{medicine.category}</td>
+                    <td>{medicine.stock}</td>
+                    <td>{medicine.expiry || "-"}</td>
+                    <td>
+                      <span
+                        className={`badge ${
+                          lowStock ? "badge-low" : "badge-good"
+                        }`}
+                      >
+                        {lowStock ? "Low Stock" : "Good Stock"}
+                      </span>
+                    </td>
+                    <td>
+                      <div className="d-flex gap-2">
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-primary"
+                          onClick={() => onEdit(medicine)}
                         >
-                          {lowStock
-                            ? "Low Stock"
-                            : "Good Stock"}
-                        </span>
+                          <i className="bi bi-pencil me-1"></i>
+                          Edit
+                        </button>
 
-                      </td>
-
-                      <td>
-
-                        <div className="d-flex gap-2">
-
-                          {/* EDIT BUTTON */}
-
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-primary"
-                            onClick={() =>
-                              onEdit(
-                                medicine
-                              )
-                            }
-                            title="Edit medicine"
-                          >
-                            <i className="bi bi-pencil me-1"></i>
-                            Edit
-                          </button>
-
-                          {/* DELETE BUTTON */}
-
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-danger"
-                            onClick={() =>
-                              onDelete(
-                                medicine.id
-                              )
-                            }
-                            title="Delete medicine"
-                          >
-                            <i className="bi bi-trash me-1"></i>
-                            Delete
-                          </button>
-
-                        </div>
-
-                      </td>
-
-                    </tr>
-                  );
-                }
-              )
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-danger"
+                          onClick={() => onDelete(medicine.id)}
+                        >
+                          <i className="bi bi-trash me-1"></i>
+                          Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })
             )}
-
           </tbody>
-
         </table>
+      </div>
+    </div>
+  );
+}
 
+// ==========================================
+// STOCK MANAGEMENT
+// ==========================================
+
+function StockManagement({
+  medicines,
+  movements,
+  onAdd,
+}) {
+  return (
+    <div className="card p-4">
+      <div className="d-flex justify-content-between align-items-center mb-3">
+        <div>
+          <h5 className="fw-bold mb-1">Stock Management</h5>
+          <p className="text-muted mb-0">
+            Stock movements are saved in stock_management and update medicine quantities.
+          </p>
+        </div>
+
+        <button className="btn btn-green" onClick={onAdd}>
+          <i className="bi bi-plus-lg me-1"></i>
+          Record Movement
+        </button>
+      </div>
+
+      <h6 className="fw-bold mt-2">Current Medicine Stock</h6>
+
+      <div className="table-responsive mb-4">
+        <table className="table align-middle">
+          <thead>
+            <tr>
+              <th>Medicine</th>
+              <th>Category</th>
+              <th>Current Stock</th>
+              <th>Expiry</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {medicines.length ? (
+              medicines.map((medicine) => (
+                <tr key={medicine.id}>
+                  <td>{medicine.name}</td>
+                  <td>{medicine.category}</td>
+                  <td>{medicine.stock}</td>
+                  <td>{medicine.expiry || "-"}</td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan="4" className="text-center text-muted">
+                  No medicines available.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      <h6 className="fw-bold">Stock Movement History</h6>
+
+      <div className="table-responsive">
+        <table className="table align-middle">
+          <thead>
+            <tr>
+              <th>Medicine</th>
+              <th>Movement</th>
+              <th>Quantity</th>
+              <th>Reason</th>
+              <th>Date</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {movements.length ? (
+              movements.map((movement) => (
+                <tr key={movement.id}>
+                  <td>
+                    {movement.medicine_name ||
+                      `Medicine #${movement.medicine_id}`}
+                  </td>
+                  <td>
+                    <span
+                      className={`badge ${
+                        movement.movement_type === "Stock In"
+                          ? "badge-good"
+                          : "badge-low"
+                      }`}
+                    >
+                      {movement.movement_type}
+                    </span>
+                  </td>
+                  <td>{movement.quantity}</td>
+                  <td>{movement.reason || "-"}</td>
+                  <td>{movement.movement_date}</td>
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan="5" className="text-center text-muted">
+                  No stock movements recorded.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </div>
     </div>
   );
@@ -2911,7 +1995,6 @@ function ReportsSection({
 }) {
   return (
     <div className="row g-4">
-
       <ReportCard
         title="Total Students"
         number={students}
@@ -2935,7 +2018,6 @@ function ReportsSection({
         number={lowStock}
         className="report-red"
       />
-
     </div>
   );
 }
@@ -2947,21 +2029,10 @@ function ReportCard({
 }) {
   return (
     <div className="col-md-6">
-
-      <div
-        className={`p-4 rounded-3 ${className}`}
-      >
-
-        <small>
-          {title}
-        </small>
-
-        <h2 className="fw-bold">
-          {number}
-        </h2>
-
+      <div className={`p-4 rounded-3 ${className}`}>
+        <small>{title}</small>
+        <h2 className="fw-bold">{number}</h2>
       </div>
-
     </div>
   );
 }
@@ -2970,81 +2041,48 @@ function ReportCard({
 // SETTINGS
 // ==========================================
 
-function SettingsSection({
-  onClear,
-}) {
-  const [
-    notifications,
-    setNotifications,
-  ] = useState(true);
-
-  const [
-    autosave,
-    setAutosave,
-  ] = useState(true);
+function SettingsSection({ onClear }) {
+  const [notifications, setNotifications] = useState(true);
+  const [autosave, setAutosave] = useState(true);
 
   return (
     <div className="card p-4">
-
-      <h5 className="fw-bold mb-4">
-        System Settings
-      </h5>
+      <h5 className="fw-bold mb-4">System Settings</h5>
 
       <div className="form-check form-switch mb-3">
-
         <input
           className="form-check-input"
           type="checkbox"
-          checked={
-            notifications
-          }
-          onChange={(e) =>
-            setNotifications(
-              e.target.checked
-            )
-          }
+          checked={notifications}
+          onChange={(e) => setNotifications(e.target.checked)}
         />
 
         <label className="form-check-label">
           Enable Notifications
         </label>
-
       </div>
 
       <div className="form-check form-switch mb-4">
-
         <input
           className="form-check-input"
           type="checkbox"
-          checked={
-            autosave
-          }
-          onChange={(e) =>
-            setAutosave(
-              e.target.checked
-            )
-          }
+          checked={autosave}
+          onChange={(e) => setAutosave(e.target.checked)}
         />
 
         <label className="form-check-label">
           Enable Auto Save
         </label>
-
       </div>
 
       <hr />
 
-      <button
-        className="btn btn-danger"
-        onClick={onClear}
-      >
+      <button className="btn btn-danger" onClick={onClear}>
         <i className="bi bi-trash me-1"></i>
         Clear Saved Test Data
       </button>
-
     </div>
   );
 }
 
 export default Dashboard;
-

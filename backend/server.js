@@ -1,1502 +1,1002 @@
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import mysql from "mysql2/promise";
+
 const app = express();
-
-app.use(cors());
-app.use(express.json());
-  
-const PORT = process.env.PORT || 8080;
-
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-});
-// ==========================================
-// FILE / FOLDER SETUP
-// ==========================================
-
+const PORT = Number(process.env.PORT || 8080);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-const DATA_FILE = path.join(
-  __dirname,
-  "clinic-data.json"
-);
+const DATA_FILE = path.join(__dirname, "clinic-data.json");
 
 
+const db = mysql.createPool({
+  host: process.env.DB_HOST,
+  port: Number(process.env.DB_PORT || 4000),
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME || "school_clinic_medicine_db",
+  ssl: {
+    minVersion: "TLSv1.2",
+  },
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0,
+  dateStrings: true,
+});
 
-
-// ==========================================
-// EMPTY DATABASE
-// ==========================================
-
-const EMPTY_DATA = {
-  students: [],
-  visits: [],
-  medicines: [],
-};
-
-// ==========================================
-// MIDDLEWARE
-// ==========================================
-
-app.use(
-  cors({
-    origin: true,
-    credentials: true,
-  })
-);
-
-app.use(
-  express.json({
-    limit: "1mb",
-  })
-);
-
-// ==========================================
-// REQUEST LOGGER
-// ==========================================
+app.use(cors({ origin: true, credentials: true }));
+app.use(express.json({ limit: "1mb" }));
 
 app.use((req, _res, next) => {
-  console.log(
-    `\n[backend] ${req.method} ${req.url}`
-  );
-
+  console.log(`[backend] ${req.method} ${req.url}`);
   next();
 });
 
+const clean = (value) => String(value ?? "").trim();
+
+const asId = (value) => {
+  const n = Number(value);
+  return Number.isInteger(n) && n > 0 ? n : null;
+};
+
+const validDate = (value) => {
+  if (!value) return null;
+  const s = String(value).slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
+};
+
+const sendError = (res, error, message) => {
+  console.error(`[MySQL] ${message}`, error);
+  res.status(500).json({
+    message,
+    error: error.message,
+  });
+};
+
 // ==========================================
-// ENSURE DATA FILE EXISTS
+// DATABASE SETUP
 // ==========================================
 
-function ensureDataFile() {
-  try {
-    if (!fs.existsSync(DATA_FILE)) {
-      fs.writeFileSync(
-        DATA_FILE,
-        JSON.stringify(
-          EMPTY_DATA,
-          null,
-          2
-        ),
-        "utf8"
-      );
+async function ensureSchema() {
+  const [columns] = await db.query(`
+    SELECT COLUMN_NAME
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'students'
+  `);
 
-      console.log(
-        "[backend] clinic-data.json created."
-      );
+  if (!columns.some((c) => c.COLUMN_NAME === "student_code")) {
+    await db.query(`
+      ALTER TABLE students
+      ADD COLUMN student_code VARCHAR(50) NULL AFTER id
+    `);
+  }
 
-      return;
-    }
+  const [indexes] = await db.query(`
+    SELECT INDEX_NAME
+    FROM INFORMATION_SCHEMA.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'students'
+    AND INDEX_NAME = 'uq_students_student_code'
+  `);
 
-    const raw = fs.readFileSync(
-      DATA_FILE,
-      "utf8"
-    );
-
-    const data = JSON.parse(
-      raw || "{}"
-    );
-
-    const fixedData = {
-      students: Array.isArray(
-        data.students
-      )
-        ? data.students
-        : [],
-
-      visits: Array.isArray(
-        data.visits
-      )
-        ? data.visits
-        : [],
-
-      medicines: Array.isArray(
-        data.medicines
-      )
-        ? data.medicines
-        : [],
-    };
-
-    fs.writeFileSync(
-      DATA_FILE,
-      JSON.stringify(
-        fixedData,
-        null,
-        2
-      ),
-      "utf8"
-    );
-  } catch (error) {
-    console.error(
-      "[backend] Invalid clinic-data.json. Resetting file."
-    );
-
-    console.error(error);
-
-    fs.writeFileSync(
-      DATA_FILE,
-      JSON.stringify(
-        EMPTY_DATA,
-        null,
-        2
-      ),
-      "utf8"
-    );
+  if (!indexes.length) {
+    await db.query(`
+      CREATE UNIQUE INDEX uq_students_student_code
+      ON students (student_code)
+    `);
   }
 }
 
 // ==========================================
-// READ DATA
+// IMPORT OLD JSON DATA INTO MYSQL
 // ==========================================
 
-function readData() {
-  ensureDataFile();
+function readLegacyData() {
+  if (!fs.existsSync(DATA_FILE)) {
+    return { students: [], visits: [] };
+  }
 
   try {
-    const raw = fs.readFileSync(
-      DATA_FILE,
-      "utf8"
-    );
-
-    const data = JSON.parse(
-      raw || "{}"
+    const parsed = JSON.parse(
+      fs.readFileSync(DATA_FILE, "utf8") || "{}"
     );
 
     return {
-      students: Array.isArray(
-        data.students
-      )
-        ? data.students
+      students: Array.isArray(parsed.students)
+        ? parsed.students
         : [],
-
-      visits: Array.isArray(
-        data.visits
-      )
-        ? data.visits
-        : [],
-
-      medicines: Array.isArray(
-        data.medicines
-      )
-        ? data.medicines
+      visits: Array.isArray(parsed.visits)
+        ? parsed.visits
         : [],
     };
   } catch (error) {
     console.error(
-      "[backend] Could not read clinic-data.json:",
-      error
+      "[migration] Could not parse clinic-data.json:",
+      error.message
     );
 
-    return {
-      students: [],
-      visits: [],
-      medicines: [],
-    };
+    return { students: [], visits: [] };
   }
 }
 
-// ==========================================
-// WRITE DATA
-// ==========================================
+async function migrateLegacyJson() {
+  const legacy = readLegacyData();
+  let importedStudents = 0;
+  let importedVisits = 0;
 
-function writeData(data) {
-  const cleanData = {
-    students: Array.isArray(
-      data.students
-    )
-      ? data.students
-      : [],
+  for (const s of legacy.students) {
+    const code = clean(s.student_code ?? s.id);
+    const name = clean(s.name);
+    const grade = clean(s.grade);
 
-    visits: Array.isArray(
-      data.visits
-    )
-      ? data.visits
-      : [],
+    if (!code || !name || !grade) continue;
 
-    medicines: Array.isArray(
-      data.medicines
-    )
-      ? data.medicines
-      : [],
-  };
+    const [found] = await db.execute(
+      "SELECT id FROM students WHERE student_code = ? LIMIT 1",
+      [code]
+    );
 
-  const tempFile =
-    `${DATA_FILE}.tmp`;
+    if (found.length) continue;
 
-  fs.writeFileSync(
-    tempFile,
-    JSON.stringify(
-      cleanData,
-      null,
-      2
-    ),
-    "utf8"
+    await db.execute(
+      `INSERT INTO students
+       (student_code, name, grade, contact)
+       VALUES (?, ?, ?, ?)`,
+      [code, name, grade, clean(s.contact)]
+    );
+
+    importedStudents++;
+  }
+
+  for (const v of legacy.visits) {
+    const student = clean(v.student);
+    const complaint = clean(v.complaint);
+    const date =
+      validDate(v.date) || new Date().toISOString().slice(0, 10);
+
+    if (!student || !complaint) continue;
+
+    const treatment = clean(v.treatment);
+    const status = clean(v.status || "Treated");
+
+    const [found] = await db.execute(
+      `SELECT id FROM visits
+       WHERE student = ?
+       AND complaint = ?
+       AND COALESCE(treatment, '') = ?
+       AND COALESCE(status, '') = ?
+       AND date = ?
+       LIMIT 1`,
+      [student, complaint, treatment, status, date]
+    );
+
+    if (found.length) continue;
+
+    await db.execute(
+      `INSERT INTO visits
+       (student, complaint, treatment, status, date)
+       VALUES (?, ?, ?, ?, ?)`,
+      [student, complaint, treatment, status, date]
+    );
+
+    importedVisits++;
+  }
+
+  console.log(
+    `[migration] Imported ${importedStudents} students and ${importedVisits} visits.`
   );
-
-  fs.renameSync(
-    tempFile,
-    DATA_FILE
-  );
+  console.log("[migration] Original JSON backup was preserved.");
 }
 
 // ==========================================
-// ROOT
+// ROOT AND HEALTH CHECK
 // ==========================================
 
-app.get(
-  "/",
-  (_req, res) => {
+app.get("/", (_req, res) => {
+  res.json({
+    ok: true,
+    message: "School Clinic API is running",
+    port: PORT,
+  });
+});
+
+app.get("/api/health", async (_req, res) => {
+  try {
+    await db.query("SELECT 1");
+
     res.json({
       ok: true,
-      message:
-        "School Clinic API is running",
-      port: PORT,
+      mysql: "connected",
+      database: "school_clinic_medicine_db",
     });
+  } catch (error) {
+    sendError(res, error, "MySQL health check failed.");
   }
-);
+});
 
 // ==========================================
-// HEALTH CHECK
+// LOAD ALL SIX MYSQL TABLES
 // ==========================================
 
-app.get(
-  "/api/health",
-  (_req, res) => {
+app.get("/api/clinic-data", async (_req, res) => {
+  try {
+    const [
+      [students],
+      [visits],
+      [medicines],
+      [medicalRecords],
+      [stockManagement],
+    ] = await Promise.all([
+      db.query("SELECT * FROM students ORDER BY id DESC"),
+      db.query("SELECT * FROM visits ORDER BY id DESC"),
+      db.query("SELECT * FROM medicines ORDER BY id DESC"),
+      db.query("SELECT * FROM medical_records ORDER BY id DESC"),
+      db.query(`
+        SELECT sm.*, m.name AS medicine_name
+        FROM stock_management sm
+        LEFT JOIN medicines m ON m.id = sm.medicine_id
+        ORDER BY sm.id DESC
+      `),
+    ]);
+
     res.json({
-      ok: true,
+      students,
+      visits,
+      medicines,
+      medicalRecords,
+      stockManagement,
     });
+  } catch (error) {
+    sendError(res, error, "Failed to load clinic data from MySQL.");
   }
-);
-
-// ==========================================
-// GET ALL CLINIC DATA
-// ==========================================
-
-app.get(
-  "/api/clinic-data",
-  (_req, res) => {
-    const data = readData();
-
-    res.json(data);
-  }
-);
+});
 
 // ==========================================
 // STUDENTS
 // ==========================================
 
-// GET STUDENTS
-
-app.get(
-  "/api/students",
-  (_req, res) => {
-    const data = readData();
-
-    res.json(
-      data.students
+app.get("/api/students", async (_req, res) => {
+  try {
+    const [rows] = await db.query(
+      "SELECT * FROM students ORDER BY id DESC"
     );
+
+    res.json(rows);
+  } catch (error) {
+    sendError(res, error, "Failed to fetch students.");
   }
-);
+});
 
-// ==========================================
-// ADD STUDENT
-// ==========================================
-
-app.post(
-  "/api/students",
-  (req, res) => {
-    try {
-      const data = readData();
-
-      const {
-        id,
-        name,
-        grade,
-        contact,
-      } = req.body;
-
-      if (
-        !id ||
-        !String(id).trim()
-      ) {
-        return res
-          .status(400)
-          .json({
-            message:
-              "Student ID is required.",
-          });
-      }
-
-      if (
-        !name ||
-        !String(name).trim()
-      ) {
-        return res
-          .status(400)
-          .json({
-            message:
-              "Student name is required.",
-          });
-      }
-
-      if (
-        !grade ||
-        !String(grade).trim()
-      ) {
-        return res
-          .status(400)
-          .json({
-            message:
-              "Grade is required.",
-          });
-      }
-
-      const duplicate =
-        data.students.some(
-          (student) =>
-            String(
-              student.id
-            ) ===
-            String(id)
-        );
-
-      if (duplicate) {
-        return res
-          .status(409)
-          .json({
-            message:
-              "Student ID already exists.",
-          });
-      }
-
-      const student = {
-        id: String(
-          id
-        ).trim(),
-
-        name: String(
-          name
-        ).trim(),
-
-        grade: String(
-          grade
-        ).trim(),
-
-        contact: contact
-          ? String(
-              contact
-            ).trim()
-          : "",
-      };
-
-      data.students.push(
-        student
-      );
-
-      writeData(data);
-
-      console.log(
-        "\n[backend] STUDENT ADDED:"
-      );
-
-      console.log(
-        JSON.stringify(
-          student,
-          null,
-          2
-        )
-      );
-
-      return res
-        .status(201)
-        .json(student);
-    } catch (error) {
-      console.error(
-        "[backend] Add student error:",
-        error
-      );
-
-      return res
-        .status(500)
-        .json({
-          message:
-            "Failed to add student.",
-        });
-    }
-  }
-);
-
-// ==========================================
-// DELETE STUDENT
-// ==========================================
-
-app.delete(
-  "/api/students/:id",
-  (req, res) => {
-    try {
-      const data = readData();
-
-      const id = String(
-        req.params.id
-      );
-
-      const index =
-        data.students.findIndex(
-          (student) =>
-            String(
-              student.id
-            ) === id
-        );
-
-      if (index === -1) {
-        return res
-          .status(404)
-          .json({
-            error:
-              "Student not found.",
-          });
-      }
-
-      const deleted =
-        data.students[index];
-
-      data.students.splice(
-        index,
-        1
-      );
-
-      writeData(data);
-
-      console.log(
-        "\n[backend] STUDENT DELETED:"
-      );
-
-      console.log(
-        JSON.stringify(
-          deleted,
-          null,
-          2
-        )
-      );
-
-      console.log(
-        "[backend] Remaining students:"
-      );
-
-      console.log(
-        JSON.stringify(
-          data.students,
-          null,
-          2
-        )
-      );
-
-      return res.json({
-        ok: true,
-        deleted,
-        remaining:
-          data.students,
-      });
-    } catch (error) {
-      console.error(
-        "[backend] Delete student error:",
-        error
-      );
-
-      return res
-        .status(500)
-        .json({
-          error:
-            "Failed to delete student.",
-        });
-    }
-  }
-);
-
-// ==========================================
-// VISITS
-// ==========================================
-
-// GET VISITS
-
-app.get(
-  "/api/visits",
-  (_req, res) => {
-    const data = readData();
-
-    res.json(
-      data.visits
+app.post("/api/students", async (req, res) => {
+  try {
+    const studentCode = clean(
+      req.body.id ?? req.body.student_code
     );
-  }
-);
+    const name = clean(req.body.name);
+    const grade = clean(req.body.grade);
+    const contact = clean(req.body.contact);
 
-// ==========================================
-// ADD VISIT
-// ==========================================
-
-app.post(
-  "/api/visits",
-  (req, res) => {
-    try {
-      const data = readData();
-
-      const body =
-        req.body &&
-        typeof req.body ===
-          "object"
-          ? req.body
-          : {};
-
-      if (
-        !body.student ||
-        !String(
-          body.student
-        ).trim()
-      ) {
-        return res
-          .status(400)
-          .json({
-            message:
-              "Student name is required.",
-          });
-      }
-
-      if (
-        !body.complaint ||
-        !String(
-          body.complaint
-        ).trim()
-      ) {
-        return res
-          .status(400)
-          .json({
-            message:
-              "Complaint is required.",
-          });
-      }
-
-      const visit = {
-        id:
-          body.id !==
-            undefined &&
-          body.id !== ""
-            ? body.id
-            : Date.now(),
-
-        student:
-          String(
-            body.student
-          ).trim(),
-
-        complaint:
-          String(
-            body.complaint
-          ).trim(),
-
-        treatment:
-          body.treatment
-            ? String(
-                body.treatment
-              ).trim()
-            : "",
-
-        status:
-          body.status ||
-          "Treated",
-
-        date:
-          body.date ||
-          new Date().toLocaleDateString(),
-      };
-
-      data.visits.push(
-        visit
-      );
-
-      writeData(data);
-
-      console.log(
-        "\n[backend] VISIT ADDED:"
-      );
-
-      console.log(
-        JSON.stringify(
-          visit,
-          null,
-          2
-        )
-      );
-
-      return res
-        .status(201)
-        .json(visit);
-    } catch (error) {
-      console.error(
-        "[backend] Add visit error:",
-        error
-      );
-
-      return res
-        .status(500)
-        .json({
-          message:
-            "Failed to add visit.",
-        });
-    }
-  }
-);
-
-// ==========================================
-// DELETE VISIT
-// ==========================================
-
-app.delete(
-  "/api/visits/:id",
-  (req, res) => {
-    try {
-      const data = readData();
-
-      const id = String(
-        req.params.id
-      );
-
-      const index =
-        data.visits.findIndex(
-          (visit) =>
-            String(
-              visit.id
-            ) === id
-        );
-
-      if (index === -1) {
-        return res
-          .status(404)
-          .json({
-            error:
-              "Visit not found.",
-          });
-      }
-
-      const deleted =
-        data.visits[index];
-
-      data.visits.splice(
-        index,
-        1
-      );
-
-      writeData(data);
-
-      console.log(
-        "\n[backend] VISIT DELETED:"
-      );
-
-      console.log(
-        JSON.stringify(
-          deleted,
-          null,
-          2
-        )
-      );
-
-      console.log(
-        "[backend] Remaining visits:"
-      );
-
-      console.log(
-        JSON.stringify(
-          data.visits,
-          null,
-          2
-        )
-      );
-
-      return res.json({
-        ok: true,
-        deleted,
-        remaining:
-          data.visits,
+    if (!studentCode || !name || !grade) {
+      return res.status(400).json({
+        message: "Student ID, name, and grade are required.",
       });
-    } catch (error) {
-      console.error(
-        "[backend] Delete visit error:",
-        error
-      );
-
-      return res
-        .status(500)
-        .json({
-          error:
-            "Failed to delete visit.",
-        });
     }
+
+    const [result] = await db.execute(
+      `INSERT INTO students
+       (student_code, name, grade, contact)
+       VALUES (?, ?, ?, ?)`,
+      [studentCode, name, grade, contact]
+    );
+
+    const [rows] = await db.execute(
+      "SELECT * FROM students WHERE id = ?",
+      [result.insertId]
+    );
+
+    console.log("[MySQL] STUDENT ADDED:", rows[0]);
+
+    res.status(201).json(rows[0]);
+  } catch (error) {
+    if (error.code === "ER_DUP_ENTRY") {
+      return res.status(409).json({
+        message: "Student ID already exists.",
+      });
+    }
+
+    sendError(res, error, "Failed to add student to MySQL.");
   }
-);
+});
+
+app.put("/api/students/:id", async (req, res) => {
+  try {
+    const id = asId(req.params.id);
+    const studentCode = clean(
+      req.body.student_code ?? req.body.id
+    );
+    const name = clean(req.body.name);
+    const grade = clean(req.body.grade);
+    const contact = clean(req.body.contact);
+
+    if (!id || !studentCode || !name || !grade) {
+      return res.status(400).json({
+        message: "Valid student ID, name, and grade are required.",
+      });
+    }
+
+    const [result] = await db.execute(
+      `UPDATE students
+       SET student_code = ?, name = ?, grade = ?, contact = ?
+       WHERE id = ?`,
+      [studentCode, name, grade, contact, id]
+    );
+
+    if (!result.affectedRows) {
+      return res.status(404).json({
+        message: "Student not found.",
+      });
+    }
+
+    const [rows] = await db.execute(
+      "SELECT * FROM students WHERE id = ?",
+      [id]
+    );
+
+    res.json(rows[0]);
+  } catch (error) {
+    if (error.code === "ER_DUP_ENTRY") {
+      return res.status(409).json({
+        message: "Student ID already exists.",
+      });
+    }
+
+    sendError(res, error, "Failed to update student.");
+  }
+});
+
+app.delete("/api/students/:id", async (req, res) => {
+  try {
+    const id = asId(req.params.id);
+
+    if (!id) {
+      return res.status(400).json({
+        message: "Invalid student record ID.",
+      });
+    }
+
+    const [rows] = await db.execute(
+      "SELECT * FROM students WHERE id = ?",
+      [id]
+    );
+
+    if (!rows.length) {
+      return res.status(404).json({
+        message: "Student not found.",
+      });
+    }
+
+    await db.execute(
+      "DELETE FROM medical_records WHERE student_id = ?",
+      [id]
+    );
+
+    await db.execute(
+      "DELETE FROM students WHERE id = ?",
+      [id]
+    );
+
+    res.json({
+      success: true,
+      deleted: rows[0],
+    });
+  } catch (error) {
+    sendError(res, error, "Failed to delete student.");
+  }
+});
+
+// ==========================================
+// CLINIC VISITS
+// ==========================================
+
+app.get("/api/visits", async (_req, res) => {
+  try {
+    const [rows] = await db.query(
+      "SELECT * FROM visits ORDER BY id DESC"
+    );
+
+    res.json(rows);
+  } catch (error) {
+    sendError(res, error, "Failed to fetch clinic visits.");
+  }
+});
+
+app.post("/api/visits", async (req, res) => {
+  try {
+    const student = clean(req.body.student);
+    const complaint = clean(req.body.complaint);
+    const treatment = clean(req.body.treatment);
+    const status = clean(req.body.status) || "Treated";
+    const date =
+      validDate(req.body.date) || new Date().toISOString().slice(0, 10);
+
+    if (!student || !complaint) {
+      return res.status(400).json({
+        message: "Student and complaint are required.",
+      });
+    }
+
+    const [result] = await db.execute(
+      `INSERT INTO visits
+       (student, complaint, treatment, status, date)
+       VALUES (?, ?, ?, ?, ?)`,
+      [student, complaint, treatment, status, date]
+    );
+
+    const [rows] = await db.execute(
+      "SELECT * FROM visits WHERE id = ?",
+      [result.insertId]
+    );
+
+    res.status(201).json(rows[0]);
+  } catch (error) {
+    sendError(res, error, "Failed to save clinic visit.");
+  }
+});
+
+app.put("/api/visits/:id", async (req, res) => {
+  try {
+    const id = asId(req.params.id);
+    const student = clean(req.body.student);
+    const complaint = clean(req.body.complaint);
+    const treatment = clean(req.body.treatment);
+    const status = clean(req.body.status) || "Treated";
+    const date =
+      validDate(req.body.date) || new Date().toISOString().slice(0, 10);
+
+    if (!id || !student || !complaint) {
+      return res.status(400).json({
+        message: "Valid visit ID, student, and complaint are required.",
+      });
+    }
+
+    const [result] = await db.execute(
+      `UPDATE visits
+       SET student = ?, complaint = ?, treatment = ?, status = ?, date = ?
+       WHERE id = ?`,
+      [student, complaint, treatment, status, date, id]
+    );
+
+    if (!result.affectedRows) {
+      return res.status(404).json({
+        message: "Visit not found.",
+      });
+    }
+
+    const [rows] = await db.execute(
+      "SELECT * FROM visits WHERE id = ?",
+      [id]
+    );
+
+    res.json(rows[0]);
+  } catch (error) {
+    sendError(res, error, "Failed to update clinic visit.");
+  }
+});
+
+app.delete("/api/visits/:id", async (req, res) => {
+  try {
+    const id = asId(req.params.id);
+
+    if (!id) {
+      return res.status(400).json({
+        message: "Invalid visit ID.",
+      });
+    }
+
+    const [result] = await db.execute(
+      "DELETE FROM visits WHERE id = ?",
+      [id]
+    );
+
+    if (!result.affectedRows) {
+      return res.status(404).json({
+        message: "Visit not found.",
+      });
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    sendError(res, error, "Failed to delete clinic visit.");
+  }
+});
 
 // ==========================================
 // MEDICINES
 // ==========================================
 
-// GET MEDICINES
-
-app.get(
-  "/api/medicines",
-  (_req, res) => {
-    const data = readData();
-
-    res.json(
-      data.medicines
+app.get("/api/medicines", async (_req, res) => {
+  try {
+    const [rows] = await db.query(
+      "SELECT * FROM medicines ORDER BY id DESC"
     );
+
+    res.json(rows);
+  } catch (error) {
+    sendError(res, error, "Failed to fetch medicines.");
   }
-);
-
-// ==========================================
-// ADD MEDICINE
-// ==========================================
-
-app.post(
-  "/api/medicines",
-  (req, res) => {
-    try {
-      const data = readData();
-
-      const {
-        name,
-        category,
-        stock,
-        expiry,
-      } = req.body;
-
-      // NAME
-
-      if (
-        !name ||
-        !String(name).trim()
-      ) {
-        return res
-          .status(400)
-          .json({
-            message:
-              "Medicine name is required.",
-          });
-      }
-
-      // CATEGORY
-
-      if (
-        !category ||
-        !String(
-          category
-        ).trim()
-      ) {
-        return res
-          .status(400)
-          .json({
-            message:
-              "Medicine category is required.",
-          });
-      }
-
-      // STOCK
-
-      if (
-        stock ===
-          undefined ||
-        stock === null ||
-        stock === ""
-      ) {
-        return res
-          .status(400)
-          .json({
-            message:
-              "Stock quantity is required.",
-          });
-      }
-
-      const stockNumber =
-        Number(stock);
-
-      if (
-        !Number.isFinite(
-          stockNumber
-        ) ||
-        stockNumber < 0
-      ) {
-        return res
-          .status(400)
-          .json({
-            message:
-              "Stock must be a valid number greater than or equal to 0.",
-          });
-      }
-
-      // CREATE MEDICINE
-
-      const medicine = {
-        id:
-          req.body.id !==
-            undefined &&
-          req.body.id !== ""
-            ? req.body.id
-            : Date.now(),
-
-        name:
-          String(
-            name
-          ).trim(),
-
-        category:
-          String(
-            category
-          ).trim(),
-
-        stock:
-          stockNumber,
-
-        expiry:
-          expiry
-            ? String(
-                expiry
-              )
-            : "",
-      };
-
-      // SAVE
-
-      data.medicines.push(
-        medicine
-      );
-
-      writeData(data);
-
-      // TERMINAL
-
-      console.log(
-        "\n=========================================="
-      );
-
-      console.log(
-        "[backend] MEDICINE ADDED"
-      );
-
-      console.log(
-        "=========================================="
-      );
-
-      console.log(
-        JSON.stringify(
-          medicine,
-          null,
-          2
-        )
-      );
-
-      console.log(
-        "==========================================\n"
-      );
-
-      return res
-        .status(201)
-        .json(medicine);
-    } catch (error) {
-      console.error(
-        "[backend] Add medicine error:",
-        error
-      );
-
-      return res
-        .status(500)
-        .json({
-          message:
-            "Failed to add medicine.",
-        });
-    }
-  }
-);
-
-// ==========================================
-// EDIT / UPDATE MEDICINE
-// ==========================================
-
-app.put(
-  "/api/medicines/:id",
-  (req, res) => {
-    try {
-      const id = String(
-        req.params.id
-      );
-
-      const data = readData();
-
-      // ==========================================
-      // FIND MEDICINE
-      // ==========================================
-
-      const medicineIndex =
-        data.medicines.findIndex(
-          (medicine) =>
-            String(
-              medicine.id
-            ) === id
-        );
-
-      if (
-        medicineIndex ===
-        -1
-      ) {
-        return res
-          .status(404)
-          .json({
-            message:
-              "Medicine not found.",
-          });
-      }
-
-      // ==========================================
-      // OLD MEDICINE
-      // ==========================================
-
-      const oldMedicine =
-        data.medicines[
-          medicineIndex
-        ];
-
-      // ==========================================
-      // NEW VALUES
-      // ==========================================
-
-      const {
-        name,
-        category,
-        stock,
-        expiry,
-      } = req.body;
-
-      // ==========================================
-      // VALIDATE NAME
-      // ==========================================
-
-      if (
-        !name ||
-        !String(name).trim()
-      ) {
-        return res
-          .status(400)
-          .json({
-            message:
-              "Medicine name is required.",
-          });
-      }
-
-      // ==========================================
-      // VALIDATE CATEGORY
-      // ==========================================
-
-      if (
-        !category ||
-        !String(
-          category
-        ).trim()
-      ) {
-        return res
-          .status(400)
-          .json({
-            message:
-              "Medicine category is required.",
-          });
-      }
-
-      // ==========================================
-      // VALIDATE STOCK
-      // ==========================================
-
-      if (
-        stock ===
-          undefined ||
-        stock === null ||
-        stock === ""
-      ) {
-        return res
-          .status(400)
-          .json({
-            message:
-              "Stock quantity is required.",
-          });
-      }
-
-      const stockNumber =
-        Number(stock);
-
-      if (
-        !Number.isFinite(
-          stockNumber
-        ) ||
-        stockNumber < 0
-      ) {
-        return res
-          .status(400)
-          .json({
-            message:
-              "Stock must be a valid number greater than or equal to 0.",
-          });
-      }
-
-      // ==========================================
-      // CREATE NEW MEDICINE
-      // ==========================================
-
-      const updatedMedicine = {
-        id:
-          oldMedicine.id,
-
-        name:
-          String(
-            name
-          ).trim(),
-
-        category:
-          String(
-            category
-          ).trim(),
-
-        stock:
-          stockNumber,
-
-        expiry:
-          expiry
-            ? String(
-                expiry
-              )
-            : "",
-      };
-
-      // ==========================================
-      // FIND ONLY CHANGED FIELDS
-      // ==========================================
-
-      const changedFields = {
-        id: oldMedicine.id,
-      };
-
-      let hasChanges = false;
-
-      // NAME CHANGED?
-
-      if (
-        oldMedicine.name !==
-        updatedMedicine.name
-      ) {
-        changedFields.name =
-          updatedMedicine.name;
-
-        hasChanges = true;
-      }
-
-      // CATEGORY CHANGED?
-
-      if (
-        oldMedicine.category !==
-        updatedMedicine.category
-      ) {
-        changedFields.category =
-          updatedMedicine.category;
-
-        hasChanges = true;
-      }
-
-      // STOCK CHANGED?
-
-      if (
-        Number(
-          oldMedicine.stock
-        ) !==
-        Number(
-          updatedMedicine.stock
-        )
-      ) {
-        changedFields.stock =
-          updatedMedicine.stock;
-
-        hasChanges = true;
-      }
-
-      // EXPIRY CHANGED?
-
-      if (
-        String(
-          oldMedicine.expiry || ""
-        ) !==
-        String(
-          updatedMedicine.expiry || ""
-        )
-      ) {
-        changedFields.expiry =
-          updatedMedicine.expiry;
-
-        hasChanges = true;
-      }
-
-      // ==========================================
-      // NOTHING WAS CHANGED
-      // ==========================================
-
-      if (!hasChanges) {
-        console.log(
-          "\n[backend] MEDICINE NOT CHANGED"
-        );
-
-        console.log(
-          "No values were changed."
-        );
-
-        return res
-          .status(200)
-          .json(
-            oldMedicine
-          );
-      }
-
-      // ==========================================
-      // SAVE UPDATED MEDICINE
-      // ==========================================
-
-      data.medicines[
-        medicineIndex
-      ] = updatedMedicine;
-
-      writeData(data);
-
-      // ==========================================
-      // TERMINAL
-      // SHOW ONLY WHAT CHANGED
-      // ==========================================
-
-      console.log(
-        "\n=========================================="
-      );
-
-      console.log(
-        "[backend] MEDICINE EDITED"
-      );
-
-      console.log(
-        "=========================================="
-      );
-
-      console.log(
-        JSON.stringify(
-          changedFields,
-          null,
-          2
-        )
-      );
-
-      console.log(
-        "==========================================\n"
-      );
-
-      // ==========================================
-      // RESPONSE
-      // ==========================================
-
-      return res
-        .status(200)
-        .json(
-          updatedMedicine
-        );
-
-    } catch (error) {
-      console.error(
-        "[backend] Update medicine error:",
-        error
-      );
-
-      return res
-        .status(500)
-        .json({
-          message:
-            "Failed to update medicine.",
-
-          error:
-            error.message,
-        });
-    }
-  }
-);
-
-// ==========================================
-// DELETE MEDICINE
-// ==========================================
-
-app.delete(
-  "/api/medicines/:id",
-  (req, res) => {
-    try {
-      const id = String(
-        req.params.id
-      );
-
-      const data = readData();
-
-      // ==========================================
-      // FIND MEDICINE
-      // ==========================================
-
-      const medicineIndex =
-        data.medicines.findIndex(
-          (medicine) =>
-            String(
-              medicine.id
-            ) === id
-        );
-
-      if (
-        medicineIndex ===
-        -1
-      ) {
-        return res
-          .status(404)
-          .json({
-            error:
-              "Medicine not found.",
-          });
-      }
-
-      // ==========================================
-      // SAVE DELETED MEDICINE
-      // ==========================================
-
-      const deletedMedicine =
-        data.medicines[
-          medicineIndex
-        ];
-
-      // ==========================================
-      // DELETE
-      // ==========================================
-
-      data.medicines.splice(
-        medicineIndex,
-        1
-      );
-
-      // ==========================================
-      // SAVE
-      // ==========================================
-
-      writeData(data);
-
-      // ==========================================
-      // TERMINAL
-      // SHOW DELETED + REMAINING
-      // ==========================================
-
-      console.log(
-        "\n=========================================="
-      );
-
-      console.log(
-        "[backend] MEDICINE DELETED"
-      );
-
-      console.log(
-        "=========================================="
-      );
-
-      console.log(
-        "[backend] DELETED MEDICINE:"
-      );
-
-      console.log(
-        JSON.stringify(
-          deletedMedicine,
-          null,
-          2
-        )
-      );
-
-      console.log(
-        "[backend] REMAINING MEDICINES:"
-      );
-
-      if (
-        data.medicines.length ===
-        0
-      ) {
-        console.log(
-          "No medicines remaining."
-        );
-      } else {
-        console.log(
-          JSON.stringify(
-            data.medicines,
-            null,
-            2
-          )
-        );
-      }
-
-      console.log(
-        "==========================================\n"
-      );
-
-      return res.json({
-        ok: true,
-
-        deleted:
-          deletedMedicine,
-
-        remaining:
-          data.medicines,
+});
+
+app.post("/api/medicines", async (req, res) => {
+  try {
+    const name = clean(req.body.name);
+    const category = clean(req.body.category);
+    const stock = Number(req.body.stock);
+    const expiry = validDate(req.body.expiry);
+
+    if (
+      !name ||
+      !category ||
+      req.body.stock === "" ||
+      !Number.isInteger(stock) ||
+      stock < 0
+    ) {
+      return res.status(400).json({
+        message: "Valid medicine name, category, and stock are required.",
       });
-
-    } catch (error) {
-      console.error(
-        "[backend] Delete medicine error:",
-        error
-      );
-
-      return res
-        .status(500)
-        .json({
-          error:
-            "Failed to delete medicine.",
-        });
     }
+
+    const [result] = await db.execute(
+      `INSERT INTO medicines
+       (name, category, stock, expiry)
+       VALUES (?, ?, ?, ?)`,
+      [name, category, stock, expiry]
+    );
+
+    const [rows] = await db.execute(
+      "SELECT * FROM medicines WHERE id = ?",
+      [result.insertId]
+    );
+
+    res.status(201).json(rows[0]);
+  } catch (error) {
+    sendError(res, error, "Failed to add medicine.");
   }
-);
+});
 
-// ==========================================
-// CLEAR ALL CLINIC DATA
-// ==========================================
+app.put("/api/medicines/:id", async (req, res) => {
+  try {
+    const id = asId(req.params.id);
+    const name = clean(req.body.name);
+    const category = clean(req.body.category);
+    const stock = Number(req.body.stock);
+    const expiry = validDate(req.body.expiry);
 
-app.delete(
-  "/api/clinic-data",
-  (_req, res) => {
-    try {
-      writeData(
-        EMPTY_DATA
-      );
+    if (!id) {
+      return res.status(400).json({
+        message: "Invalid medicine ID.",
+      });
+    }
 
-      console.log(
-        "\n=========================================="
-      );
+    if (
+      !name ||
+      !category ||
+      req.body.stock === "" ||
+      !Number.isInteger(stock) ||
+      stock < 0
+    ) {
+      return res.status(400).json({
+        message: "Valid medicine name, category, and stock are required.",
+      });
+    }
 
-      console.log(
-        "[backend] ALL CLINIC DATA CLEARED"
-      );
+    const [result] = await db.execute(
+      `UPDATE medicines
+       SET name = ?, category = ?, stock = ?, expiry = ?
+       WHERE id = ?`,
+      [name, category, stock, expiry, id]
+    );
 
-      console.log(
-        "Students: 0"
-      );
+    if (!result.affectedRows) {
+      return res.status(404).json({
+        message: "Medicine not found.",
+      });
+    }
 
-      console.log(
-        "Visits: 0"
-      );
+    const [rows] = await db.execute(
+      "SELECT * FROM medicines WHERE id = ?",
+      [id]
+    );
 
-      console.log(
-        "Medicines: 0"
-      );
+    res.json({
+      success: true,
+      medicine: rows[0],
+    });
+  } catch (error) {
+    sendError(res, error, "Failed to update medicine.");
+  }
+});
 
-      console.log(
-        "==========================================\n"
-      );
+app.delete("/api/medicines/:id", async (req, res) => {
+  try {
+    const id = asId(req.params.id);
 
-      return res.json({
-        ok: true,
+    if (!id) {
+      return res.status(400).json({
+        message: "Invalid medicine ID.",
+      });
+    }
 
+    const [stockRows] = await db.execute(
+      "SELECT id FROM stock_management WHERE medicine_id = ? LIMIT 1",
+      [id]
+    );
+
+    if (stockRows.length) {
+      return res.status(409).json({
         message:
-          "All clinic data cleared.",
+          "This medicine has stock history. Keep it in inventory instead of deleting it.",
       });
-    } catch (error) {
-      console.error(
-        "[backend] Clear data error:",
-        error
-      );
-
-      return res
-        .status(500)
-        .json({
-          ok: false,
-
-          message:
-            "Failed to clear clinic data.",
-        });
     }
+
+    const [result] = await db.execute(
+      "DELETE FROM medicines WHERE id = ?",
+      [id]
+    );
+
+    if (!result.affectedRows) {
+      return res.status(404).json({
+        message: "Medicine not found.",
+      });
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    sendError(res, error, "Failed to delete medicine.");
   }
-);
+});
+
+// ==========================================
+// MEDICAL RECORDS
+// ==========================================
+
+app.get("/api/medical-records", async (_req, res) => {
+  try {
+    const [rows] = await db.query(`
+      SELECT
+        mr.*,
+        s.student_code,
+        s.name AS student_name,
+        s.grade
+      FROM medical_records mr
+      LEFT JOIN students s ON s.id = mr.student_id
+      ORDER BY mr.id DESC
+    `);
+
+    res.json(rows);
+  } catch (error) {
+    sendError(res, error, "Failed to fetch medical records.");
+  }
+});
+
+app.post("/api/medical-records", async (req, res) => {
+  try {
+    const studentId = asId(req.body.student_id);
+    const diagnosis = clean(req.body.diagnosis);
+    const treatment = clean(req.body.treatment);
+    const notes = clean(req.body.notes);
+    const recordDate =
+      validDate(req.body.record_date) ||
+      new Date().toISOString().slice(0, 10);
+
+    if (!studentId || !diagnosis) {
+      return res.status(400).json({
+        message: "Select a student and enter a diagnosis.",
+      });
+    }
+
+    const [student] = await db.execute(
+      "SELECT id FROM students WHERE id = ?",
+      [studentId]
+    );
+
+    if (!student.length) {
+      return res.status(404).json({
+        message: "Selected student was not found.",
+      });
+    }
+
+    const [result] = await db.execute(
+      `INSERT INTO medical_records
+       (student_id, diagnosis, treatment, notes, record_date)
+       VALUES (?, ?, ?, ?, ?)`,
+      [studentId, diagnosis, treatment, notes, recordDate]
+    );
+
+    const [rows] = await db.execute(
+      `SELECT
+         mr.*,
+         s.student_code,
+         s.name AS student_name,
+         s.grade
+       FROM medical_records mr
+       LEFT JOIN students s ON s.id = mr.student_id
+       WHERE mr.id = ?`,
+      [result.insertId]
+    );
+
+    res.status(201).json(rows[0]);
+  } catch (error) {
+    sendError(res, error, "Failed to add medical record.");
+  }
+});
+
+app.put("/api/medical-records/:id", async (req, res) => {
+  try {
+    const id = asId(req.params.id);
+    const studentId = asId(req.body.student_id);
+    const diagnosis = clean(req.body.diagnosis);
+    const treatment = clean(req.body.treatment);
+    const notes = clean(req.body.notes);
+    const recordDate =
+      validDate(req.body.record_date) ||
+      new Date().toISOString().slice(0, 10);
+
+    if (!id || !studentId || !diagnosis) {
+      return res.status(400).json({
+        message: "Valid record, student, and diagnosis are required.",
+      });
+    }
+
+    const [result] = await db.execute(
+      `UPDATE medical_records
+       SET student_id = ?, diagnosis = ?, treatment = ?,
+           notes = ?, record_date = ?
+       WHERE id = ?`,
+      [studentId, diagnosis, treatment, notes, recordDate, id]
+    );
+
+    if (!result.affectedRows) {
+      return res.status(404).json({
+        message: "Medical record not found.",
+      });
+    }
+
+    const [rows] = await db.execute(
+      `SELECT
+         mr.*,
+         s.student_code,
+         s.name AS student_name,
+         s.grade
+       FROM medical_records mr
+       LEFT JOIN students s ON s.id = mr.student_id
+       WHERE mr.id = ?`,
+      [id]
+    );
+
+    res.json(rows[0]);
+  } catch (error) {
+    sendError(res, error, "Failed to update medical record.");
+  }
+});
+
+app.delete("/api/medical-records/:id", async (req, res) => {
+  try {
+    const id = asId(req.params.id);
+
+    if (!id) {
+      return res.status(400).json({
+        message: "Invalid medical record ID.",
+      });
+    }
+
+    const [result] = await db.execute(
+      "DELETE FROM medical_records WHERE id = ?",
+      [id]
+    );
+
+    if (!result.affectedRows) {
+      return res.status(404).json({
+        message: "Medical record not found.",
+      });
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    sendError(res, error, "Failed to delete medical record.");
+  }
+});
+
+// ==========================================
+// STOCK MANAGEMENT
+// ==========================================
+
+app.get("/api/stock-management", async (_req, res) => {
+  try {
+    const [rows] = await db.query(`
+      SELECT
+        sm.*,
+        m.name AS medicine_name
+      FROM stock_management sm
+      LEFT JOIN medicines m ON m.id = sm.medicine_id
+      ORDER BY sm.id DESC
+    `);
+
+    res.json(rows);
+  } catch (error) {
+    sendError(res, error, "Failed to fetch stock history.");
+  }
+});
+
+app.post("/api/stock-management", async (req, res) => {
+  const connection = await db.getConnection();
+
+  try {
+    const medicineId = asId(req.body.medicine_id);
+    const movementType = clean(req.body.movement_type);
+    const quantity = Number(req.body.quantity);
+    const reason = clean(req.body.reason);
+
+    if (
+      !medicineId ||
+      !["Stock In", "Stock Out"].includes(movementType) ||
+      !Number.isInteger(quantity) ||
+      quantity <= 0
+    ) {
+      return res.status(400).json({
+        message:
+          "Select a medicine, Stock In/Stock Out, and a positive whole-number quantity.",
+      });
+    }
+
+    await connection.beginTransaction();
+
+    const [medicines] = await connection.execute(
+      "SELECT * FROM medicines WHERE id = ? FOR UPDATE",
+      [medicineId]
+    );
+
+    if (!medicines.length) {
+      await connection.rollback();
+
+      return res.status(404).json({
+        message: "Medicine not found.",
+      });
+    }
+
+    const currentStock = Number(medicines[0].stock);
+
+    const newStock =
+      movementType === "Stock In"
+        ? currentStock + quantity
+        : currentStock - quantity;
+
+    if (newStock < 0) {
+      await connection.rollback();
+
+      return res.status(400).json({
+        message: "Stock Out quantity exceeds available stock.",
+      });
+    }
+
+    await connection.execute(
+      "UPDATE medicines SET stock = ? WHERE id = ?",
+      [newStock, medicineId]
+    );
+
+    const [insert] = await connection.execute(
+      `INSERT INTO stock_management
+       (medicine_id, movement_type, quantity, reason, movement_date)
+       VALUES (?, ?, ?, ?, NOW())`,
+      [medicineId, movementType, quantity, reason || null]
+    );
+
+    await connection.commit();
+
+    const [rows] = await db.execute(
+      `SELECT
+         sm.*,
+         m.name AS medicine_name
+       FROM stock_management sm
+       LEFT JOIN medicines m ON m.id = sm.medicine_id
+       WHERE sm.id = ?`,
+      [insert.insertId]
+    );
+
+    res.status(201).json({
+      ...rows[0],
+      new_stock: newStock,
+    });
+  } catch (error) {
+    await connection.rollback();
+    sendError(res, error, "Failed to save stock movement.");
+  } finally {
+    connection.release();
+  }
+});
+
+app.delete("/api/stock-management/:id", async (req, res) => {
+  return res.status(409).json({
+    message:
+      "Stock history entries are retained for audit accuracy. Record an opposite movement to correct a mistake.",
+  });
+});
+
+// ==========================================
+// CLEAR ALL SIX TABLES
+// ==========================================
+
+app.delete("/api/clinic-data", async (_req, res) => {
+  const connection = await db.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    await connection.query("DELETE FROM stock_management");
+    await connection.query("DELETE FROM medical_records");
+    await connection.query("DELETE FROM visits");
+    await connection.query("DELETE FROM students");
+    await connection.query("DELETE FROM medicines");
+
+    await connection.commit();
+
+    res.json({
+      success: true,
+      message: "All six clinic tables were cleared.",
+    });
+  } catch (error) {
+    await connection.rollback();
+    sendError(res, error, "Failed to clear clinic data.");
+  } finally {
+    connection.release();
+  }
+});
 
 // ==========================================
 // ERROR HANDLER
 // ==========================================
 
-app.use(
-  (
-    error,
-    _req,
-    res,
-    _next
-  ) => {
-    console.error(
-      "[backend] Request error:",
-      error
-    );
+app.use((error, _req, res, _next) => {
+  console.error("[backend] Unhandled request error:", error);
 
-    res
-      .status(500)
-      .json({
-        error:
-          "Internal server error.",
-      });
-  }
-);
-
-// ==========================================
-// INITIALIZE DATA FILE
-// ==========================================
-
-ensureDataFile();
+  res.status(500).json({
+    message: "Internal server error.",
+    error: error.message,
+  });
+});
 
 // ==========================================
 // START SERVER
 // ==========================================
 
-app.listen(
-  PORT,
-  () => {
-    console.log(
-      "\n=========================================="
-    );
+async function startServer() {
+  try {
+    await db.query("SELECT 1");
 
     console.log(
-      "       SCHOOL CLINIC BACKEND"
+      "[MySQL] Connected to school_clinic_medicine_db"
     );
 
-    console.log(
-      "=========================================="
-    );
+    await ensureSchema();
+    await migrateLegacyJson();
 
-    console.log(
-      `Server:  https://scs-zpxe.onrender.com`
-    );
-
-    console.log(
-      `Data file: ${DATA_FILE}`
-    );
-
-    console.log(
-      "Status: READY"
-    );
-
-    console.log(
-      "Waiting for frontend requests..."
-    );
-
-    console.log(
-      "==========================================\n"
-    );
+    app.listen(PORT, () => {
+      console.log("==========================================");
+      console.log("       SCHOOL CLINIC BACKEND");
+      console.log("==========================================");
+      console.log(`Server: http://localhost:${PORT}`);
+      console.log("Storage: MySQL (all six clinic tables)");
+      console.log("Status: READY");
+      console.log("==========================================");
+    });
+  } catch (error) {
+    console.error("[backend] Startup failed:", error);
+    process.exit(1);
   }
-);
+}
+
+startServer();
