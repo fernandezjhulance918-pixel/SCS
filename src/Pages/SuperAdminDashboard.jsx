@@ -11,6 +11,37 @@ import { getUserRole, clearUserSession } from "../role";
 
 const API_BASE = "https://scs-zpxe.onrender.com/api";
 
+async function apiRequest(endpoint, options = {}) {
+  const currentUser = auth.currentUser;
+
+  if (!currentUser) {
+    throw new Error("Please log in again.");
+  }
+
+  const token = await currentUser.getIdToken();
+
+  const response = await fetch(`${API_BASE}${endpoint}`, {
+    ...options,
+    headers: {
+      ...(options.body
+        ? { "Content-Type": "application/json" }
+        : {}),
+      ...options.headers,
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+
+    throw new Error(
+      errorData.message || `API request failed: ${response.status}`
+    );
+  }
+
+  return response.status === 204 ? null : response.json();
+}
+
 function SuperAdminDashboard() {
   const navigate = useNavigate();
 
@@ -87,22 +118,9 @@ function SuperAdminDashboard() {
     return () => unsubscribe();
   }, [user]);
 
-  const loadBackendData = async () => {
-    try {
-      const response = await fetch(
-        `${API_BASE}/clinic-data`,
-        {
-          cache: "no-store",
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error(
-          `Backend returned ${response.status}`
-        );
-      }
-
-      const data = await response.json();
+ const data = await apiRequest("/clinic-data", {
+  cache: "no-store",
+});
 
       setStudents(
         Array.isArray(data.students)
@@ -165,26 +183,12 @@ function SuperAdminDashboard() {
     }
   };
 
-  const addStudent = async (studentData) => {
-    try {
-      const response = await fetch(
-        `${API_BASE}/students`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(studentData),
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error(
-          `Failed to add student: ${response.status}`
-        );
-      }
-
-      const newStudent = await response.json();
+const addStudent = async (studentData) => {
+  try {
+    const newStudent = await apiRequest("/students", {
+      method: "POST",
+      body: JSON.stringify(studentData),
+    });
 
       setStudents((current) => [
         ...current,
@@ -219,19 +223,9 @@ function SuperAdminDashboard() {
     if (!confirmed) return;
 
     try {
-      const response = await fetch(
-        `${API_BASE}/students/${id}`,
-        {
-          method: "DELETE",
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error(
-          `Failed to delete student: ${response.status}`
-        );
-      }
-
+     await apiRequest(`/students/${id}`, {
+  method: "DELETE",
+});
       setStudents((current) =>
         current.filter(
           (item) =>
@@ -255,26 +249,10 @@ function SuperAdminDashboard() {
     }
   };
 
-  const addVisit = async (visitData) => {
-    try {
-      const response = await fetch(
-        `${API_BASE}/visits`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(visitData),
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error(
-          `Failed to add visit: ${response.status}`
-        );
-      }
-
-      const newVisit = await response.json();
+ const newVisit = await apiRequest("/visits", {
+  method: "POST",
+  body: JSON.stringify(visitData),
+});
 
       setVisits((current) => [
         ...current,
@@ -309,18 +287,9 @@ function SuperAdminDashboard() {
     if (!confirmed) return;
 
     try {
-      const response = await fetch(
-        `${API_BASE}/visits/${id}`,
-        {
-          method: "DELETE",
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error(
-          `Failed to delete visit: ${response.status}`
-        );
-      }
+     await apiRequest(`/visits/${id}`, {
+  method: "DELETE",
+});
 
       setVisits((current) =>
         current.filter(
@@ -347,25 +316,10 @@ function SuperAdminDashboard() {
 
   const addMedicine = async (medicineData) => {
     try {
-      const response = await fetch(
-        `${API_BASE}/medicines`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(medicineData),
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error(
-          `Failed to add medicine: ${response.status}`
-        );
-      }
-
-      const newMedicine = await response.json();
-
+   const newMedicine = await apiRequest("/medicines", {
+  method: "POST",
+  body: JSON.stringify(medicineData),
+});
       setMedicines((current) => [
         ...current,
         newMedicine,
@@ -399,18 +353,9 @@ function SuperAdminDashboard() {
     if (!confirmed) return;
 
     try {
-      const response = await fetch(
-        `${API_BASE}/medicines/${id}`,
-        {
-          method: "DELETE",
-        }
-      );
-
-      if (!response.ok) {
-        throw new Error(
-          `Failed to delete medicine: ${response.status}`
-        );
-      }
+      await apiRequest(`/medicines/${id}`, {
+  method: "DELETE",
+});
 
       setMedicines((current) =>
         current.filter(
@@ -443,12 +388,9 @@ function SuperAdminDashboard() {
     if (!confirmed) return;
 
     try {
-      const response = await fetch(
-        `${API_BASE}/clinic-data`,
-        {
-          method: "DELETE",
-        }
-      );
+     await apiRequest("/clinic-data", {
+  method: "DELETE",
+});
 
       if (!response.ok) {
         throw new Error(
