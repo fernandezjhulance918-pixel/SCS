@@ -4,7 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { onAuthStateChanged, signOut } from "firebase/auth";
 import { auth } from "../Firebase";
 
-const API_BASE = "http://localhost:8080/api";
+const API_BASE = "https://scs-zpxe.onrender.com/api";
 
 async function apiRequest(endpoint, options = {}) {
   const response = await fetch(`${API_BASE}${endpoint}`, {
