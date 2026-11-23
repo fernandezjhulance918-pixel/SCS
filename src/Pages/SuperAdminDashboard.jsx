@@ -9,7 +9,7 @@ import {
 import { auth, db } from "../Firebase";
 import { getUserRole, clearUserSession } from "../role";
 
-const API_BASE = "http://localhost:8080/api";
+const API_BASE = "https://scs-zpxe.onrender.com/api";
 
 function SuperAdminDashboard() {
   const navigate = useNavigate();
