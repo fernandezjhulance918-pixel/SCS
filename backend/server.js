@@ -6,7 +6,36 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import mysql from "mysql2/promise";
 
+import {
+  initializeApp,
+  cert,
+  getApps,
+} from "firebase-admin/app";
+
+import { getAuth } from "firebase-admin/auth";
+import { getFirestore } from "firebase-admin/firestore";
+
 const app = express();
+// ==========================================
+// FIREBASE ADMIN SDK
+// ==========================================
+
+const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+
+if (!serviceAccountJson) {
+  throw new Error("FIREBASE_SERVICE_ACCOUNT_JSON is missing.");
+}
+
+const serviceAccount = JSON.parse(serviceAccountJson);
+
+const firebaseApp = getApps().length
+  ? getApps()[0]
+  : initializeApp({
+      credential: cert(serviceAccount),
+    });
+
+const firebaseAuth = getAuth(firebaseApp);
+const firestore = getFirestore(firebaseApp);
 const PORT = Number(process.env.PORT || 8080);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -56,6 +85,73 @@ const sendError = (res, error, message) => {
     error: error.message,
   });
 };
+
+// ==========================================
+// FIREBASE AUTHENTICATION AND ROLE CHECK
+// ==========================================
+
+const normalizeRole = (role) =>
+  String(role ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, "");
+
+async function requireClinicUser(req, res, next) {
+  try {
+    const authHeader = req.headers.authorization || "";
+    const token = authHeader.match(/^Bearer\s+(.+)$/i)?.[1];
+
+    if (!token) {
+      return res.status(401).json({
+        message: "Authentication required. Please log in.",
+      });
+    }
+
+    const decodedToken = await firebaseAuth.verifyIdToken(token);
+
+    const userDoc = await firestore
+      .collection("users")
+      .doc(decodedToken.uid)
+      .get();
+
+    if (!userDoc.exists) {
+      return res.status(403).json({
+        message: "Your account does not have an assigned role.",
+      });
+    }
+
+    const role = normalizeRole(userDoc.data().role);
+
+    if (!["admin", "superadmin"].includes(role)) {
+      return res.status(403).json({
+        message: "You do not have permission to access this system.",
+      });
+    }
+
+    req.user = {
+      uid: decodedToken.uid,
+      role,
+    };
+
+    next();
+  } catch (error) {
+    console.error("[Firebase Auth] Verification failed:", error.message);
+
+    return res.status(401).json({
+      message: "Invalid or expired login session. Please log in again.",
+    });
+  }
+}
+
+function requireSuperAdmin(req, res, next) {
+  if (req.user?.role !== "superadmin") {
+    return res.status(403).json({
+      message: "Only the Super Admin can perform this action.",
+    });
+  }
+
+  next();
+}
 
 // ==========================================
 // DATABASE SETUP
@@ -218,6 +314,9 @@ app.get("/api/health", async (_req, res) => {
     sendError(res, error, "MySQL health check failed.");
   }
 });
+
+// Protect all API routes below this line
+app.use("/api", requireClinicUser);
 
 // ==========================================
 // LOAD ALL SIX MYSQL TABLES
@@ -930,7 +1029,7 @@ app.delete("/api/stock-management/:id", async (req, res) => {
 // CLEAR ALL SIX TABLES
 // ==========================================
 
-app.delete("/api/clinic-data", async (_req, res) => {
+app.delete("/api/clinic-data", requireSuperAdmin, async (_req, res) => {
   const connection = await db.getConnection();
 
   try {
