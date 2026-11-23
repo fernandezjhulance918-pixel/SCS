@@ -7,13 +7,30 @@ import { auth } from "../Firebase";
 const API_BASE = "https://scs-zpxe.onrender.com/api";
 
 async function apiRequest(endpoint, options = {}) {
+  const user = auth.currentUser;
+
+  if (!user) {
+    throw new Error("Please log in again.");
+  }
+
+  const token = await user.getIdToken();
+
   const response = await fetch(`${API_BASE}${endpoint}`, {
     ...options,
     headers: {
       ...(options.body ? { "Content-Type": "application/json" } : {}),
       ...options.headers,
+      Authorization: `Bearer ${token}`,
     },
   });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.message || "API request failed.");
+  }
+
+  return response.status === 204 ? null : response.json();
+}
 
   const text = await response.text();
   let data = {};
